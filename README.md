@@ -2,7 +2,7 @@
 
 PyDLNM is a Python implementation of distributed lag linear and non-linear models (DLMs/DLNMs) for modeling exposure-lag-response associations in epidemiological studies.
 
-### this is still under development, so all features are not working
+### this is still under development, so it may not be working; use at your own risk!
 
 ## Overview
 
@@ -31,6 +31,7 @@ pip install -e ".[dev]"
 import numpy as np
 import pydlnm as pd
 from pydlnm.data import chicago_nmmaps
+import statsmodels.api as sm
 
 # Load example data
 data = chicago_nmmaps()
@@ -44,12 +45,12 @@ cb_temp = pd.CrossBasis(
 )
 
 # Fit model (using statsmodels or similar)
-# model = sm.GLM(data['death'], cb_temp, family=sm.families.Poisson()).fit()
+model = sm.GLM(data['death'], cb_temp, family=sm.families.Poisson()).fit()
 
 # Make predictions
-# pred = pd.CrossPred(cb_temp, model, at=np.arange(-10, 35, 1))
+pred = pd.CrossPred(cb_temp, model, at=np.arange(-10, 35, 1))
 
-# Visualize results
+# Visualize results (not working yet)
 # pred.plot()
 ```
 

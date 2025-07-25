@@ -90,11 +90,11 @@ def getvcov(model: Any, model_class: Optional[str] = None) -> np.ndarray:
     vcov_attrs = ['cov_params', 'vcov', 'cov_', 'covariance_matrix']
     vcov_methods = ['cov_params', 'vcov']
     
-    # Try attributes first
+    # Try attributes first (but skip if they are callable/methods)
     for attr in vcov_attrs:
         if hasattr(model, attr):
             vcov = getattr(model, attr)
-            if vcov is not None:
+            if vcov is not None and not callable(vcov):
                 return np.asarray(vcov)
     
     # Try methods
