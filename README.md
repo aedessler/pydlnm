@@ -63,7 +63,3 @@ This Python implementation is based on the R dlnm package by Antonio Gasparrini 
 ## License
 
 GPL-2.0-or-later
-
-## Contributing
-
-Contributions are welcome! Please see the contributing guidelines for details.
