@@ -2,7 +2,9 @@
 
 PyDLNM is a Python implementation of distributed lag linear and non-linear models (DLMs/DLNMs) for modeling exposure-lag-response associations in epidemiological studies.
 
-### this is still under development, so it may not be working; use at your own risk!
+This is version 0.1.0
+
+### this is still under development, so it is not fully working nor well validated; use at your own risk!
 
 ## Overview
 

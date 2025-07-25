@@ -12,6 +12,12 @@ from sklearn.preprocessing import PolynomialFeatures
 from typing import Union, Optional, List, Tuple, Any, Dict
 import warnings
 
+# Import enhanced spline implementations
+from .enhanced_splines import (
+    bs_enhanced, ns_enhanced, 
+    EnhancedBSplineBasis, EnhancedNaturalSplineBasis
+)
+
 
 class BaseBasisFunction:
     """
@@ -185,7 +191,7 @@ class SplineBasis(BaseBasisFunction):
     
     def __call__(self, x: np.ndarray, **kwargs) -> np.ndarray:
         """
-        Generate natural spline basis matrix.
+        Generate natural spline basis matrix using enhanced implementation.
         
         Parameters
         ----------
@@ -197,76 +203,18 @@ class SplineBasis(BaseBasisFunction):
         np.ndarray
             Natural spline basis matrix
         """
-        x = np.asarray(x, dtype=float)
-        x_clean = x[~np.isnan(x)]
+        # Use enhanced natural spline implementation
+        basis_matrix, enhanced_attrs = ns_enhanced(
+            x,
+            df=self.df,
+            knots=self.knots,
+            intercept=self.intercept
+        )
         
-        if len(x_clean) == 0:
-            raise ValueError("No valid (non-NaN) values in x")
+        # Update attributes with enhanced information
+        self.attributes.update(enhanced_attrs)
         
-        # Determine knots if not provided
-        if self.knots is None:
-            # For natural splines, df = number of interior knots + 1
-            n_interior = self.df - 1
-            if n_interior > 0:
-                quantiles = np.linspace(0, 1, n_interior + 2)[1:-1]
-                knots = np.quantile(x_clean, quantiles)
-            else:
-                knots = np.array([])
-        else:
-            knots = np.asarray(self.knots)
-        
-        self.attributes['knots'] = knots
-        
-        # Boundary knots
-        boundary_knots = [np.min(x_clean), np.max(x_clean)]
-        
-        # Create full knot vector (boundary + interior)
-        all_knots = np.concatenate([boundary_knots[:1], knots, boundary_knots[1:]])
-        all_knots = np.sort(all_knots)
-        
-        # Generate B-spline basis of degree 3 (cubic)
-        degree = 3
-        
-        # Extend knot vector for B-splines
-        extended_knots = np.concatenate([
-            np.repeat(all_knots[0], degree),
-            all_knots,
-            np.repeat(all_knots[-1], degree)
-        ])
-        
-        # Create B-spline basis
-        n_basis = len(all_knots) + degree - 1
-        basis_funcs = []
-        
-        for i in range(n_basis):
-            # Create B-spline for each basis function
-            coef = np.zeros(n_basis)
-            coef[i] = 1.0
-            spline = BSpline(extended_knots, coef, degree, extrapolate=False)
-            basis_funcs.append(spline)
-        
-        # Evaluate all basis functions
-        basis = np.zeros((len(x), n_basis))
-        for i, spline in enumerate(basis_funcs):
-            # Handle extrapolation manually
-            basis[:, i] = np.where(
-                (x >= all_knots[0]) & (x <= all_knots[-1]),
-                spline(x),
-                0.0
-            )
-        
-        # Apply natural spline constraints (linear beyond boundary knots)
-        # This is a simplified implementation
-        if len(knots) > 0:
-            # Remove some columns to satisfy natural spline constraints
-            if basis.shape[1] > self.df:
-                basis = basis[:, :self.df]
-        
-        if not self.intercept and basis.shape[1] > 0:
-            # Remove first column if no intercept wanted
-            basis = basis[:, 1:]
-        
-        return basis
+        return basis_matrix
 
 
 class BSplineBasis(BaseBasisFunction):
@@ -303,7 +251,7 @@ class BSplineBasis(BaseBasisFunction):
     
     def __call__(self, x: np.ndarray, **kwargs) -> np.ndarray:
         """
-        Generate B-spline basis matrix.
+        Generate B-spline basis matrix using enhanced implementation.
         
         Parameters
         ----------
@@ -315,67 +263,19 @@ class BSplineBasis(BaseBasisFunction):
         np.ndarray
             B-spline basis matrix
         """
-        x = np.asarray(x, dtype=float)
-        x_clean = x[~np.isnan(x)]
+        # Use enhanced B-spline implementation
+        basis_matrix, enhanced_attrs = bs_enhanced(
+            x, 
+            df=self.df,
+            knots=self.knots,
+            degree=self.degree,
+            intercept=self.intercept
+        )
         
-        if len(x_clean) == 0:
-            raise ValueError("No valid (non-NaN) values in x")
+        # Update attributes with enhanced information
+        self.attributes.update(enhanced_attrs)
         
-        # Determine knots if not provided
-        if self.knots is None:
-            # For B-splines, df = number of interior knots + degree + 1
-            n_interior = self.df - self.degree - 1
-            if n_interior > 0:
-                quantiles = np.linspace(0, 1, n_interior + 2)[1:-1]
-                knots = np.quantile(x_clean, quantiles)
-            else:
-                knots = np.array([])
-        else:
-            knots = np.asarray(self.knots)
-        
-        self.attributes['knots'] = knots
-        
-        # Boundary knots
-        boundary_knots = [np.min(x_clean), np.max(x_clean)]
-        
-        # Create full knot vector
-        all_knots = np.concatenate([boundary_knots[:1], knots, boundary_knots[1:]])
-        all_knots = np.sort(all_knots)
-        
-        # Extend knot vector for B-splines
-        extended_knots = np.concatenate([
-            np.repeat(all_knots[0], self.degree),
-            all_knots,
-            np.repeat(all_knots[-1], self.degree)
-        ])
-        
-        # Create B-spline basis
-        n_basis = len(all_knots) + self.degree - 1
-        basis_funcs = []
-        
-        for i in range(n_basis):
-            coef = np.zeros(n_basis)
-            coef[i] = 1.0
-            spline = BSpline(extended_knots, coef, self.degree, extrapolate=False)
-            basis_funcs.append(spline)
-        
-        # Evaluate all basis functions
-        basis = np.zeros((len(x), n_basis))
-        for i, spline in enumerate(basis_funcs):
-            basis[:, i] = np.where(
-                (x >= all_knots[0]) & (x <= all_knots[-1]),
-                spline(x),
-                0.0
-            )
-        
-        # Trim to desired df
-        if basis.shape[1] > self.df:
-            basis = basis[:, :self.df]
-        
-        if not self.intercept and basis.shape[1] > 0:
-            basis = basis[:, 1:]
-        
-        return basis
+        return basis_matrix
 
 
 class StrataBasis(BaseBasisFunction):

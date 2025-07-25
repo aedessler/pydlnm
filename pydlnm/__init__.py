@@ -25,6 +25,9 @@ __author__ = "Python DLNM Contributors"
 # Core classes
 from .basis import OneBasis, CrossBasis
 from .prediction import CrossPred
+from .meta_analysis import MVMeta, mvmeta
+from .centering import find_mmt, recenter_basis, CenteringManager
+from .attribution import attrdl, attr_heat_cold, AttributionManager
 
 # Utility functions
 from .utils import mklag, seqlag, exphist
@@ -39,6 +42,30 @@ from .basis_functions import (
     ThresholdBasis,
 )
 
+# Enhanced spline implementations
+from .enhanced_splines import (
+    EnhancedBSplineBasis,
+    EnhancedNaturalSplineBasis,
+    bs_enhanced,
+    ns_enhanced,
+)
+
+# Seasonality modeling
+from .seasonality import (
+    HarmonicSeasonalBasis,
+    SeasonalSplineBasis,
+    FlexibleSeasonalBasis,
+    create_seasonal_basis,
+    SeasonalityManager,
+)
+
+# Penalized DLNM framework
+from .penalized import (
+    PenalizedCrossBasis,
+    PenalizedDLNM,
+    penalized_dlnm,
+)
+
 # Data
 from . import data
 
@@ -46,6 +73,14 @@ __all__ = [
     "OneBasis",
     "CrossBasis", 
     "CrossPred",
+    "MVMeta",
+    "mvmeta",
+    "find_mmt",
+    "recenter_basis",
+    "CenteringManager",
+    "attrdl",
+    "attr_heat_cold",
+    "AttributionManager",
     "mklag",
     "seqlag", 
     "exphist",
@@ -55,5 +90,17 @@ __all__ = [
     "BSplineBasis", 
     "StrataBasis",
     "ThresholdBasis",
+    "EnhancedBSplineBasis",
+    "EnhancedNaturalSplineBasis",
+    "bs_enhanced",
+    "ns_enhanced",
+    "HarmonicSeasonalBasis",
+    "SeasonalSplineBasis", 
+    "FlexibleSeasonalBasis",
+    "create_seasonal_basis",
+    "SeasonalityManager",
+    "PenalizedCrossBasis",
+    "PenalizedDLNM", 
+    "penalized_dlnm",
     "data",
 ]
