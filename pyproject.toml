@@ -53,10 +53,9 @@ interactive = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/pydlnm/pydlnm"
-Documentation = "https://pydlnm.readthedocs.io"
-Repository = "https://github.com/pydlnm/pydlnm.git"
-"Bug Tracker" = "https://github.com/pydlnm/pydlnm/issues"
+Homepage = "https://github.com/aedessler/pydlnm"
+Documentation = "https://github.com/aedessler/pydlnm"
+Repository = "https://github.com/aedessler/pydlnm.git"
 
 [tool.setuptools.packages.find]
 where = ["."]
