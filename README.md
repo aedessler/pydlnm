@@ -15,20 +15,6 @@ The PyDLNM package provides functions to specify and interpret distributed lag l
 - **Visualization tools**: 3D surfaces, contour plots, and slice visualizations
 - **Multiple study designs**: Time series, case-control, cohort, and experimental studies
 
-## Installation
-
-```bash
-pip install pydlnm
-```
-
-For development installation:
-
-```bash
-git clone https://github.com/pydlnm/pydlnm.git
-cd pydlnm
-pip install -e ".[dev]"
-```
-
 ## Quick Start
 
 ```python
