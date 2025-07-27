@@ -24,10 +24,14 @@ __author__ = "Python DLNM Contributors"
 
 # Core classes
 from .basis import OneBasis, CrossBasis
-from .prediction import CrossPred
+from .prediction import CrossPred, crosspred
 from .meta_analysis import MVMeta, mvmeta
 from .centering import find_mmt, recenter_basis, CenteringManager
 from .attribution import attrdl, attr_heat_cold, AttributionManager
+
+# GLM integration and model fitting
+from .glm_integration import DLNMGLMInterface, fit_dlnm_model
+from .crossreduce import CrossReduce, crossreduce, coef, vcov
 
 # Utility functions
 from .utils import mklag, seqlag, exphist
@@ -73,6 +77,7 @@ __all__ = [
     "OneBasis",
     "CrossBasis", 
     "CrossPred",
+    "crosspred",
     "MVMeta",
     "mvmeta",
     "find_mmt",
@@ -81,6 +86,12 @@ __all__ = [
     "attrdl",
     "attr_heat_cold",
     "AttributionManager",
+    "DLNMGLMInterface",
+    "fit_dlnm_model",
+    "CrossReduce",
+    "crossreduce",
+    "coef",
+    "vcov",
     "mklag",
     "seqlag", 
     "exphist",

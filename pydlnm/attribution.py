@@ -14,7 +14,91 @@ import warnings
 
 from .basis import CrossBasis
 from .prediction import CrossPred
-from .centering import find_mmt
+from .centering import find_mmt, find_mmt_blup
+
+
+def attrdl_proper(x: np.ndarray,
+                  basis_matrix: np.ndarray,
+                  cases: np.ndarray,
+                  coef: np.ndarray,
+                  vcov: Optional[np.ndarray] = None,
+                  cen: float = None,
+                  range_vals: Optional[Tuple[float, float]] = None,
+                  type: str = "an") -> float:
+    """
+    Calculate attributable risk using proper R-style methodology
+    
+    This implements the core calculation from R's attrdl function, using
+    cross-basis matrix predictions and relative risk calculations.
+    
+    Parameters:
+    -----------
+    x : array-like
+        Exposure time series
+    basis_matrix : array-like
+        Cross-basis matrix (n_obs x n_basis)
+    cases : array-like
+        Observed cases (deaths) time series
+    coef : array-like
+        Model coefficients for basis functions
+    vcov : array-like, optional
+        Variance-covariance matrix
+    cen : float
+        Centering value (MMT)
+    range_vals : tuple, optional
+        Range of exposure values for attribution (min, max)
+    type : str
+        Type: "an" (attributable numbers) or "af" (attributable fraction)
+        
+    Returns:
+    --------
+    float
+        Attributable deaths/fraction
+    """
+    
+    # Remove missing values
+    valid_mask = ~(np.isnan(x) | np.isnan(cases))
+    x_valid = x[valid_mask]
+    cases_valid = cases[valid_mask]
+    basis_valid = basis_matrix[valid_mask]
+    
+    if len(x_valid) == 0:
+        return 0.0
+    
+    # Calculate predicted log-relative risks from basis matrix
+    log_rr = basis_valid @ coef
+    
+    # Convert to relative risks
+    rr = np.exp(log_rr)
+    
+    # Apply range filter if specified
+    if range_vals is not None:
+        range_mask = (x_valid >= range_vals[0]) & (x_valid <= range_vals[1])
+    else:
+        range_mask = np.ones(len(x_valid), dtype=bool)
+    
+    # Calculate attributable fraction for each observation
+    # AF = (RR - 1) / RR = 1 - 1/RR
+    af_obs = 1 - (1 / rr)
+    
+    # Apply range mask
+    af_obs = af_obs * range_mask
+    
+    if type == "an":
+        # Attributable numbers: sum of AF * observed cases
+        attributable = np.sum(af_obs * cases_valid)
+    elif type == "af":
+        # Attributable fraction: weighted average
+        total_cases = np.sum(cases_valid[range_mask])
+        if total_cases > 0:
+            attributable_cases = np.sum(af_obs * cases_valid)
+            attributable = attributable_cases / total_cases
+        else:
+            attributable = 0.0
+    else:
+        raise ValueError("type must be 'an' or 'af'")
+    
+    return attributable
 
 
 def attrdl(x: np.ndarray,

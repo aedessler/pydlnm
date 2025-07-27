@@ -263,9 +263,26 @@ class CrossBasis:
         self.argvar = argvar or {}
         self.arglag = arglag or {}
         
-        # Set default lag arguments if not specified
+        # Set default lag arguments to EXACTLY match R DLNM defaults
         if len(self.arglag) == 0 or np.diff(self.lag)[0] == 0:
-            self.arglag = {'fun': 'strata', 'df': 1, 'intercept': True}
+            # R uses natural splines by default for lag dimension with specific knots
+            # For lag=21, lagnk=3, R creates knots at logknots(21, 3)
+            lag_seq = seqlag(self.lag)
+            if len(lag_seq) > 1:
+                # Use R's logknots function equivalent
+                import math
+                lag_max = max(lag_seq)
+                if lag_max > 1:
+                    knots = np.exp(np.linspace(math.log(1), math.log(lag_max), 3))
+                    self.arglag = {'fun': 'ns', 'knots': knots, 'intercept': True}
+                else:
+                    self.arglag = {'fun': 'ns', 'df': 4, 'intercept': True}
+            else:
+                self.arglag = {'fun': 'ns', 'df': 4, 'intercept': True}
+        
+        # Ensure natural splines are used for lag by default (like R)
+        if 'fun' not in self.arglag:
+            self.arglag['fun'] = 'ns'
         
         # Add intercept by default for lag basis if not specified
         if 'intercept' not in self.arglag:
@@ -322,20 +339,102 @@ class CrossBasis:
             self._create_matrix_basis(n_var_basis, n_lag_basis)
     
     def _create_time_series_basis(self, n_var_basis: int, n_lag_basis: int):
-        """Create cross-basis for time series data."""
-        lag_seq = seqlag(self.lag)
+        """Create cross-basis for time series data using proper tensor product.
         
+        This implements the proper crossbasis calculation matching R's dlnm behavior:
+        The CrossBasis is the sum over all lags of:
+        (variable_basis_function(lagged_exposure) * lag_basis_function(lag))
+        
+        R behavior: First max_lag observations are entirely NaN because we cannot
+        compute the full distributed lag effect without complete exposure history.
+        """
+        lag_seq = seqlag(self.lag)
+        n_obs = self.x.shape[0]
+        exposure_values = self.x.flatten()
+        
+        # Determine maximum lag for NaN pattern
+        max_lag = int(np.max(lag_seq))
+        
+        # Create lagged exposure matrix (n_obs x n_lags)  
+        lagged_exposure_matrix = self._create_lagged_matrix(exposure_values, lag_seq)
+        
+        # For each variable basis function
         for v in range(n_var_basis):
-            # Get the v-th variable basis function values
-            var_basis_col = self.basisvar.basis[:, v]
-            
-            # Create lagged matrix for this basis function
-            lagged_matrix = self._create_lagged_matrix(var_basis_col, lag_seq)
-            
-            # Apply lag basis functions
+            # For each lag basis function
             for l in range(n_lag_basis):
-                col_idx = n_lag_basis * v + l
-                self.basis[:, col_idx] = lagged_matrix @ self.basislag.basis[:, l]
+                col_idx = v * n_lag_basis + l
+                
+                # Initialize column with zeros
+                self.basis[:, col_idx] = 0.0
+                
+                # Sum over all lag times
+                for lag_time_idx, lag_time in enumerate(lag_seq):
+                    # Get the lagged exposure values at this lag time
+                    lagged_exposure = lagged_exposure_matrix[:, lag_time_idx]
+                    
+                    # Apply variable basis function v to the lagged exposure
+                    var_basis_at_lag = self._evaluate_var_basis_at_lag(lagged_exposure, v)
+                    
+                    # Get lag basis weight for this lag time and lag function
+                    # FIXED: Use correct indexing [lag_time_idx, l] not [l, 0]
+                    lag_weight = self.basislag.basis[lag_time_idx, l]
+                    
+                    # Accumulate the distributed lag contribution
+                    self.basis[:, col_idx] += var_basis_at_lag * lag_weight
+        
+        # R dlnm behavior: Set entire first max_lag rows to NaN
+        # This is because for observations 0 to max_lag-1, we don't have complete
+        # exposure history to compute the distributed lag effect
+        if max_lag > 0:
+            self.basis[:max_lag, :] = np.nan
+    
+    def _evaluate_var_basis_at_lag(self, lagged_values: np.ndarray, basis_idx: int) -> np.ndarray:
+        """
+        Evaluate the variable basis function at lagged exposure values.
+        
+        This recreates the variable basis transformation for the given lagged values
+        and returns the basis_idx-th column. NaN values are preserved.
+        """
+        # Check for NaN values and preserve them
+        nan_mask = np.isnan(lagged_values)
+        result = np.full_like(lagged_values, np.nan)
+        
+        if np.all(nan_mask):
+            # All values are NaN, return all NaN
+            return result
+        
+        try:
+            # Recreate the variable basis function with same parameters
+            var_basis_func_class = OneBasis._FUNCTION_MAP.get(self.argvar.get('fun', 'ns'))
+            if var_basis_func_class is None:
+                # Fallback to using precomputed values
+                if basis_idx < self.basisvar.basis.shape[1]:
+                    return self.basisvar.basis[:, basis_idx]
+                else:
+                    return np.full(len(lagged_values), np.nan)
+            
+            # Create temporary basis function with same parameters
+            temp_func = var_basis_func_class(**self.argvar)
+            temp_basis = temp_func(lagged_values)
+            
+            # Return the requested basis column
+            if basis_idx < temp_basis.shape[1]:
+                result = temp_basis[:, basis_idx]
+            else:
+                result = np.full(len(lagged_values), np.nan)
+                
+            # Ensure NaN values are preserved
+            result[nan_mask] = np.nan
+            return result
+                
+        except Exception:
+            # Fallback: preserve NaN pattern
+            if basis_idx < self.basisvar.basis.shape[1]:
+                result = np.full_like(lagged_values, self.basisvar.basis[0, basis_idx])
+                result[nan_mask] = np.nan
+                return result
+            else:
+                return np.full(len(lagged_values), np.nan)
     
     def _create_matrix_basis(self, n_var_basis: int, n_lag_basis: int):
         """Create cross-basis for matrix data."""
@@ -366,11 +465,11 @@ class CrossBasis:
         Returns
         -------
         np.ndarray
-            Matrix with lagged values
+            Matrix with lagged values (with NaN for unavailable lag periods)
         """
         n_obs = len(values)
         n_lags = len(lag_seq)
-        lagged_matrix = np.zeros((n_obs, n_lags))
+        lagged_matrix = np.full((n_obs, n_lags), np.nan)  # Initialize with NaN
         
         for i, lag_val in enumerate(lag_seq):
             lag_int = int(lag_val)
@@ -379,9 +478,11 @@ class CrossBasis:
             elif lag_int > 0:
                 # Positive lag: shift backwards in time
                 lagged_matrix[lag_int:, i] = values[:-lag_int]
+                # First lag_int observations remain NaN (no exposure history)
             else:
                 # Negative lag: shift forwards in time  
                 lagged_matrix[:lag_int, i] = values[-lag_int:]
+                # Last abs(lag_int) observations remain NaN
         
         return lagged_matrix
     

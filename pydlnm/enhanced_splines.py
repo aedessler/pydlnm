@@ -87,6 +87,8 @@ def bs_enhanced(x: np.ndarray,
         internal_knots,
         np.repeat(xr, degree + 1)
     ])
+    # Ensure knots are sorted (should already be, but ensure compliance)
+    extended_knots = np.sort(extended_knots)
     
     # Number of basis functions
     n_basis = len(extended_knots) - degree - 1

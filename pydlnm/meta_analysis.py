@@ -98,174 +98,209 @@ class MVMeta:
         self.y = y
         self.S = S
         
-        # Fit model based on method
-        if self.method in ["reml", "ml"]:
-            self._fit_random_effects()
-        elif self.method == "fixed":
-            self._fit_fixed_effects()
+        # Fit the model based on method
+        if self.method == "fixed":
+            self._fit_fixed()
+        elif self.method in ["reml", "ml"]:
+            self._fit_random()
         else:
             raise ValueError(f"Unknown method: {self.method}")
             
+        self.converged = True
         return self
     
-    def _fit_fixed_effects(self):
-        """Fit fixed-effects meta-analysis"""
-        # Vectorize y and create block-diagonal covariance matrix
-        y_vec = self.y.ravel()
+    def _fit_fixed(self):
+        """Fit fixed-effects meta-analysis model"""
+        # Fixed effects: no between-study heterogeneity
+        self.psi = np.zeros((self.n_outcomes, self.n_outcomes))
         
-        # Create block-diagonal matrix from S matrices
-        V = linalg.block_diag(*self.S)
+        # Stack data and create block-diagonal covariance matrix
+        y_vec = self.y.flatten(order='F')  # Column-major like R
+        X_expanded = np.kron(np.eye(self.n_outcomes), self.X)
         
-        # Create design matrix
-        X_block = np.kron(np.eye(self.n_outcomes), self.X)
+        # Create block-diagonal within-study covariance matrix
+        V = np.zeros((self.n_studies * self.n_outcomes, self.n_studies * self.n_outcomes))
+        for i in range(self.n_studies):
+            start_idx = i * self.n_outcomes
+            end_idx = (i + 1) * self.n_outcomes
+            V[start_idx:end_idx, start_idx:end_idx] = self.S[i]
         
-        # Weighted least squares
+        # Weighted least squares estimation
         try:
             V_inv = linalg.inv(V)
-            XtVinv = X_block.T @ V_inv
-            self.vcov = linalg.inv(XtVinv @ X_block)
-            self.coefficients = self.vcov @ XtVinv @ y_vec
+            XtV_inv = X_expanded.T @ V_inv
+            self.vcov = linalg.inv(XtV_inv @ X_expanded)
+            self.coefficients = self.vcov @ XtV_inv @ y_vec
             
-            # Reshape coefficients
-            self.coefficients = self.coefficients.reshape(self.n_predictors, self.n_outcomes)
+            # Reshape coefficients to (n_predictors, n_outcomes)
+            self.coefficients = self.coefficients.reshape((self.n_predictors, self.n_outcomes), order='F')
             
             # Calculate fitted values and residuals
-            self.fitted_values = (X_block @ self.coefficients.ravel()).reshape(self.n_studies, self.n_outcomes)
-            self.residuals = self.y - self.fitted_values
+            self.fitted_values = X_expanded @ self.coefficients.flatten(order='F')
+            self.residuals = y_vec - self.fitted_values
             
-            # No between-study heterogeneity in fixed effects
-            self.psi = np.zeros((self.n_outcomes, self.n_outcomes))
-            self.converged = True
+            # Calculate log-likelihood
+            self.loglik = -0.5 * (np.log(linalg.det(V)) + self.residuals.T @ V_inv @ self.residuals)
             
         except linalg.LinAlgError:
-            warnings.warn("Singular covariance matrix in fixed effects estimation")
-            self.converged = False
+            raise ValueError("Singular covariance matrix in fixed-effects model")
     
-    def _fit_random_effects(self):
-        """Fit random-effects meta-analysis using REML or ML"""
-        # Initialize Psi (between-study variance-covariance)
+    def _fit_random(self):
+        """Fit random-effects meta-analysis model using REML or ML"""
+        
+        # Initialize between-study covariance matrix
         psi_init = np.eye(self.n_outcomes) * 0.1
         
-        # Flatten upper triangle of Psi for optimization
-        psi_params = psi_init[np.triu_indices(self.n_outcomes)]
+        # Optimize between-study variance parameters
+        if self.method == "reml":
+            objective = self._reml_objective
+        else:  # ML
+            objective = self._ml_objective
         
-        # Optimization
+        # Vectorize psi for optimization (lower triangle + diagonal)
+        psi_vec_init = self._psi_to_vec(psi_init)
+        
         result = minimize(
-            fun=self._neg_loglik,
-            x0=psi_params,
+            objective, 
+            psi_vec_init,
             method='BFGS',
-            options=self.control
+            options={'disp': self.control.get('showiter', False)}
         )
         
         if result.success:
-            # Reconstruct Psi from optimized parameters
-            self.psi = self._params_to_psi(result.x)
+            # Extract optimal psi
+            self.psi = self._vec_to_psi(result.x)
             
-            # Calculate final coefficients with optimal Psi
-            self._update_coefficients()
+            # Estimate fixed effects with optimal psi
+            self._estimate_fixed_effects()
+            
+            # Store optimization results
             self.loglik = -result.fun
             self.converged = True
         else:
-            warnings.warn("Optimization did not converge")
+            # Fallback to simple estimates
+            warnings.warn("Optimization failed, using simple estimates")
+            self.psi = np.eye(self.n_outcomes) * 0.1
+            self._estimate_fixed_effects()
             self.converged = False
     
-    def _neg_loglik(self, psi_params: np.ndarray) -> float:
-        """Negative log-likelihood for optimization"""
-        try:
-            psi = self._params_to_psi(psi_params)
-            
-            # Check if Psi is positive definite
-            if not self._is_positive_definite(psi):
-                return np.inf
-            
-            # Calculate total covariance matrix for each study
-            loglik = 0.0
-            
-            for i in range(self.n_studies):
-                Vi = self.S[i] + psi  # Total covariance
-                
-                if not self._is_positive_definite(Vi):
-                    return np.inf
-                
-                # Calculate log-likelihood contribution
-                try:
-                    Vi_inv = linalg.inv(Vi)
-                    sign, logdet = linalg.slogdet(Vi)
-                    if sign <= 0:
-                        return np.inf
-                    
-                    # Expected values under current model
-                    expected = (self.X[i:i+1] @ self.coefficients.ravel().reshape(-1, self.n_outcomes)).ravel()
-                    residual = self.y[i] - expected.reshape(1, -1).ravel()
-                    
-                    loglik += -0.5 * (logdet + residual @ Vi_inv @ residual)
-                    
-                except linalg.LinAlgError:
-                    return np.inf
-            
-            # REML correction
-            if self.method == "reml":
-                # Add penalty for fixed effects
-                X_block = np.kron(np.eye(self.n_outcomes), self.X)
-                V_total = linalg.block_diag(*[self.S[i] + psi for i in range(self.n_studies)])
-                
-                try:
-                    V_inv = linalg.inv(V_total)
-                    XtVinvX = X_block.T @ V_inv @ X_block
-                    sign, logdet_X = linalg.slogdet(XtVinvX)
-                    if sign > 0:
-                        loglik -= 0.5 * logdet_X
-                except linalg.LinAlgError:
-                    return np.inf
-            
-            return -loglik
-            
-        except Exception:
-            return np.inf
-    
-    def _params_to_psi(self, params: np.ndarray) -> np.ndarray:
-        """Convert parameter vector to Psi matrix"""
-        psi = np.zeros((self.n_outcomes, self.n_outcomes))
-        triu_indices = np.triu_indices(self.n_outcomes)
-        psi[triu_indices] = params
+    def _estimate_fixed_effects(self):
+        """Estimate fixed effects given between-study covariance psi"""
         
-        # Make symmetric
-        psi = psi + psi.T - np.diag(np.diag(psi))
+        # Create total covariance matrix (within + between study)
+        y_vec = self.y.flatten(order='F')
+        X_expanded = np.kron(np.eye(self.n_outcomes), self.X)
         
-        return psi
-    
-    def _is_positive_definite(self, matrix: np.ndarray) -> bool:
-        """Check if matrix is positive definite"""
-        try:
-            linalg.cholesky(matrix)
-            return True
-        except linalg.LinAlgError:
-            return False
-    
-    def _update_coefficients(self):
-        """Update coefficients given current Psi estimate"""
-        # Create total covariance matrix
-        V_total = linalg.block_diag(*[self.S[i] + self.psi for i in range(self.n_studies)])
+        # Total covariance matrix
+        V_total = np.zeros((self.n_studies * self.n_outcomes, self.n_studies * self.n_outcomes))
+        for i in range(self.n_studies):
+            start_idx = i * self.n_outcomes
+            end_idx = (i + 1) * self.n_outcomes
+            V_total[start_idx:end_idx, start_idx:end_idx] = self.S[i] + self.psi
         
-        # Vectorized design and response
-        X_block = np.kron(np.eye(self.n_outcomes), self.X)
-        y_vec = self.y.ravel()
-        
+        # Generalized least squares
         try:
             V_inv = linalg.inv(V_total)
-            XtVinv = X_block.T @ V_inv
-            self.vcov = linalg.inv(XtVinv @ X_block)
-            coef_vec = self.vcov @ XtVinv @ y_vec
+            XtV_inv = X_expanded.T @ V_inv
+            self.vcov = linalg.inv(XtV_inv @ X_expanded)
+            coef_vec = self.vcov @ XtV_inv @ y_vec
             
             # Reshape coefficients
-            self.coefficients = coef_vec.reshape(self.n_predictors, self.n_outcomes)
+            self.coefficients = coef_vec.reshape((self.n_predictors, self.n_outcomes), order='F')
             
-            # Calculate fitted values and residuals
-            self.fitted_values = (X_block @ coef_vec).reshape(self.n_studies, self.n_outcomes)
-            self.residuals = self.y - self.fitted_values
+            # Calculate fitted values and residuals  
+            self.fitted_values = X_expanded @ coef_vec
+            self.residuals = y_vec - self.fitted_values
             
         except linalg.LinAlgError:
-            warnings.warn("Singular matrix in coefficient update")
+            raise ValueError("Singular total covariance matrix")
+    
+    def _psi_to_vec(self, psi):
+        """Convert psi matrix to vector (lower triangle)"""
+        indices = np.tril_indices(self.n_outcomes)
+        return psi[indices]
+    
+    def _vec_to_psi(self, vec):
+        """Convert vector to psi matrix (symmetric)"""
+        psi = np.zeros((self.n_outcomes, self.n_outcomes))
+        indices = np.tril_indices(self.n_outcomes)
+        psi[indices] = vec
+        psi = psi + psi.T - np.diag(np.diag(psi))
+        return psi
+    
+    def _reml_objective(self, psi_vec):
+        """REML objective function"""
+        try:
+            psi = self._vec_to_psi(psi_vec)
+            
+            # Ensure positive definiteness
+            eigenvals = linalg.eigvals(psi)
+            if np.any(eigenvals <= 0):
+                return 1e10
+            
+            # Create total covariance matrix
+            y_vec = self.y.flatten(order='F')
+            X_expanded = np.kron(np.eye(self.n_outcomes), self.X)
+            
+            V_total = np.zeros((self.n_studies * self.n_outcomes, self.n_studies * self.n_outcomes))
+            for i in range(self.n_studies):
+                start_idx = i * self.n_outcomes
+                end_idx = (i + 1) * self.n_outcomes
+                V_total[start_idx:end_idx, start_idx:end_idx] = self.S[i] + psi
+            
+            V_inv = linalg.inv(V_total)
+            XtV_inv = X_expanded.T @ V_inv
+            
+            # REML likelihood components
+            logdet_V = np.log(linalg.det(V_total))
+            logdet_XtVX = np.log(linalg.det(XtV_inv @ X_expanded))
+            
+            # Residual sum of squares
+            P = V_inv - V_inv @ X_expanded @ linalg.inv(XtV_inv @ X_expanded) @ XtV_inv
+            rss = y_vec.T @ P @ y_vec
+            
+            # REML objective (negative log-likelihood)
+            reml = 0.5 * (logdet_V + logdet_XtVX + rss)
+            
+            return reml
+            
+        except (linalg.LinAlgError, ValueError):
+            return 1e10
+    
+    def _ml_objective(self, psi_vec):
+        """ML objective function"""
+        try:
+            psi = self._vec_to_psi(psi_vec)
+            
+            # Ensure positive definiteness
+            eigenvals = linalg.eigvals(psi)
+            if np.any(eigenvals <= 0):
+                return 1e10
+            
+            # Create total covariance matrix and estimate effects
+            y_vec = self.y.flatten(order='F')
+            X_expanded = np.kron(np.eye(self.n_outcomes), self.X)
+            
+            V_total = np.zeros((self.n_studies * self.n_outcomes, self.n_studies * self.n_outcomes))
+            for i in range(self.n_studies):
+                start_idx = i * self.n_outcomes
+                end_idx = (i + 1) * self.n_outcomes
+                V_total[start_idx:end_idx, start_idx:end_idx] = self.S[i] + psi
+            
+            V_inv = linalg.inv(V_total)
+            XtV_inv = X_expanded.T @ V_inv
+            
+            # ML estimates
+            coef_vec = linalg.inv(XtV_inv @ X_expanded) @ XtV_inv @ y_vec
+            residuals = y_vec - X_expanded @ coef_vec
+            
+            # ML objective (negative log-likelihood)
+            ml = 0.5 * (np.log(linalg.det(V_total)) + residuals.T @ V_inv @ residuals)
+            
+            return ml
+            
+        except (linalg.LinAlgError, ValueError):
+            return 1e10
     
     def predict(self, X_new: Optional[np.ndarray] = None) -> Tuple[np.ndarray, np.ndarray]:
         """

@@ -14,6 +14,98 @@ from .basis import CrossBasis
 from .prediction import CrossPred
 
 
+def find_mmt_blup(x: np.ndarray,
+                  blup_coef: np.ndarray,
+                  fun: str = "bs",
+                  knots: Optional[np.ndarray] = None,
+                  degree: int = 2,
+                  percentile_range: Tuple[int, int] = (1, 99)) -> Dict:
+    """
+    Find minimum mortality temperature using BLUP coefficients (R-style method)
+    
+    This implements the same methodology as the R dlnm package's MMT calculation
+    using BLUP (Best Linear Unbiased Predictors) coefficients.
+    
+    Parameters:
+    -----------
+    x : array-like
+        Temperature time series data
+    blup_coef : array-like 
+        BLUP coefficients from meta-analysis
+    fun : str, default "bs"
+        Basis function type
+    knots : array-like, optional
+        Knot positions for basis functions
+    degree : int, default 2
+        Degree of basis functions
+    percentile_range : tuple, default (1, 99)
+        Range of percentiles to search for MMT
+        
+    Returns:
+    --------
+    dict
+        Dictionary containing MMT results
+    """
+    from .basis_functions import BSplineBasis
+    
+    # Create prediction range (1st to 99th percentiles like R)
+    predvar = np.percentile(x[~np.isnan(x)], 
+                          np.arange(percentile_range[0], percentile_range[1] + 1))
+    
+    # Set up basis function arguments like R's onebasis
+    if knots is None:
+        # Default knots at 10%, 75%, 90% percentiles
+        knots = np.percentile(x[~np.isnan(x)], [10, 75, 90])
+    
+    # Create basis matrix for prediction range with boundary knots
+    x_range = np.array([np.min(x[~np.isnan(x)]), np.max(x[~np.isnan(x)])])
+    
+    try:
+        basis_func = BSplineBasis(
+            knots=knots,
+            degree=degree,
+            include_intercept=True,
+            boundary_knots=x_range
+        )
+        
+        # Generate basis matrix for prediction temperatures
+        bvar = basis_func.transform(predvar.reshape(-1, 1))
+        
+        # Calculate risk values: bvar %*% blup_coef (like R)
+        risk_values = bvar @ blup_coef
+        
+        # Find minimum risk point
+        min_idx = np.argmin(risk_values)
+        mmt_percentile = percentile_range[0] + min_idx
+        mmt_temperature = predvar[min_idx]
+        
+        result = {
+            'mmt': mmt_temperature,
+            'percentile': mmt_percentile,
+            'min_risk': risk_values[min_idx],
+            'risk_range': (np.min(risk_values), np.max(risk_values)),
+            'predvar': predvar,
+            'risk_values': risk_values,
+            'basis_matrix': bvar,
+            'method': 'blup_optimization'
+        }
+        
+        return result
+        
+    except Exception as e:
+        # Fallback to simpler method if basis function fails
+        warnings.warn(f"BLUP MMT calculation failed ({e}), using median fallback")
+        median_temp = np.median(x[~np.isnan(x)])
+        median_percentile = np.mean(x[~np.isnan(x)] <= median_temp) * 100
+        
+        return {
+            'mmt': median_temp,
+            'percentile': median_percentile,
+            'method': 'median_fallback',
+            'error': str(e)
+        }
+
+
 def find_mmt(basis: CrossBasis, 
              model: Any,
              coef: Optional[np.ndarray] = None,

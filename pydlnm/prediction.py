@@ -401,3 +401,102 @@ class CrossPred:
     
     def __str__(self) -> str:
         return self.summary()
+
+
+def crosspred(basis: Union[OneBasis, CrossBasis],
+              model: Any,
+              at: Optional[np.ndarray] = None,
+              from_val: Optional[float] = None,
+              to_val: Optional[float] = None,
+              by: Optional[float] = None,
+              lag: Optional[Union[int, List, Tuple]] = None,
+              bylag: float = 1.0,
+              cen: Optional[float] = None,
+              ci_level: float = 0.95,
+              cumul: bool = False,
+              **kwargs) -> CrossPred:
+    """
+    Create cross-predictions from distributed lag models.
+    
+    This function creates predictions from fitted distributed lag models,
+    matching R's dlnm::crosspred() interface. It generates predictions
+    over specified ranges of the exposure variable and lag periods.
+    
+    Parameters
+    ----------
+    basis : OneBasis or CrossBasis
+        The basis object used in model fitting
+    model : fitted model object
+        Fitted statistical model (e.g., from statsmodels GLM)
+    at : array-like, optional
+        Specific values at which to make predictions
+    from_val : float, optional
+        Starting value for prediction range
+    to_val : float, optional
+        Ending value for prediction range
+    by : float, optional
+        Step size for prediction range
+    lag : int, list, or tuple, optional
+        Lag sub-period for predictions
+    bylag : float, default=1.0
+        Step size for lag dimension
+    cen : float, optional
+        Centering value for predictions
+    ci_level : float, default=0.95
+        Confidence interval level
+    cumul : bool, default=False
+        Whether to compute cumulative effects
+    **kwargs
+        Additional arguments passed to CrossPred
+        
+    Returns
+    -------
+    crosspred : CrossPred
+        Cross-prediction object with fitted values, standard errors,
+        and confidence intervals
+        
+    Examples
+    --------
+    >>> from pydlnm import CrossBasis, crosspred, fit_dlnm_model
+    >>> cb = CrossBasis(temp, lag=21, argvar={'fun': 'bs'})
+    >>> model = fit_dlnm_model(cb, deaths, family='poisson')
+    >>> pred = crosspred(cb, model.fitted_values, cen=mean_temp)
+    >>> print(pred.summary())
+    """
+    
+    # Extract model coefficients and variance-covariance matrix
+    if hasattr(model, 'params') and hasattr(model, 'cov_params'):
+        # statsmodels GLM
+        coef = model.params
+        vcov = model.cov_params()
+        model_link = getattr(model.model.family, 'link', None)
+        if model_link:
+            model_link = model_link.__class__.__name__.lower()
+    elif hasattr(model, 'coef_') and hasattr(model, 'predict'):
+        # sklearn model
+        coef = getattr(model, 'coef_', None)
+        vcov = None  # sklearn doesn't provide covariance matrix
+        model_link = 'identity'
+    else:
+        raise ValueError("Model type not recognized. Must be statsmodels or sklearn model.")
+    
+    # Create CrossPred object
+    pred = CrossPred(
+        basis=basis,
+        model=model,
+        coef=coef,
+        vcov=vcov,
+        model_link=model_link,
+        at=at,
+        from_val=from_val,
+        to_val=to_val,
+        by=by,
+        lag=lag,
+        bylag=bylag,
+        cen=cen,
+        ci_level=ci_level,
+        cumul=cumul,
+        **kwargs
+    )
+    
+    return pred

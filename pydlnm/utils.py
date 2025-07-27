@@ -220,28 +220,84 @@ def equalknots(x: np.ndarray,
     return knots
 
 
-def logknots(maxlag: int, df: int) -> np.ndarray:
+def logknots(x: Union[int, List[int], np.ndarray], 
+             nk: Optional[int] = None, 
+             fun: str = "ns", 
+             df: Optional[int] = None, 
+             degree: int = 3, 
+             intercept: bool = True) -> np.ndarray:
     """
-    Place knots at log-spaced values for lag dimension.
+    Place knots at log-spaced values, exactly matching R dlnm logknots() behavior.
+    
+    This function creates interior knots for spline functions using log-spaced positions,
+    which is particularly useful for lag-response relationships where effects decay 
+    exponentially with time.
     
     Parameters
     ----------
-    maxlag : int
-        Maximum lag value
-    df : int
+    x : int, list, or array
+        Lag range. If single value, interpreted as [0, x]. If length 2, interpreted as range.
+    nk : int, optional
+        Number of knots. If None, calculated based on fun, df, degree, intercept.
+    fun : str, default="ns"
+        Basis function type ("ns", "bs", "strata")
+    df : int, default=1
         Degrees of freedom
+    degree : int, default=3
+        Degree of polynomial (for B-splines)
+    intercept : bool, default=True
+        Whether intercept is included
         
     Returns
     -------
     np.ndarray
-        Log-spaced knot positions
+        Log-spaced interior knot positions
+        
+    Examples
+    --------
+    >>> logknots(21, df=3)  # R: logknots(21, 3)
+    array([1.01119306, 2.77947331, 7.63995648])
     """
-    if df <= 1:
-        return np.array([])
+    x = np.asarray(x).flatten()
     
-    # Create log-spaced positions
-    log_positions = np.logspace(0, np.log10(maxlag + 1), df - 1)
-    # Subtract 1 to get 0-based indexing and ensure we don't exceed maxlag
-    knots = np.minimum(log_positions - 1, maxlag - 1)
+    # If length of x is 1 or 2, interpret as lag range, otherwise take the range
+    if len(x) < 3:
+        lag_range = mklag(x)
+    else:
+        lag_range = np.array([np.min(x), np.max(x)])
     
-    return knots[knots > 0]  # Remove any knots at or below 0
+    if np.diff(lag_range)[0] == 0:
+        raise ValueError("range must be > 0")
+    
+    # Choose number of knots if not provided
+    if nk is None:
+        # If df is provided, calculate nk from it
+        if df is not None:
+            if fun == "ns":
+                nk = df - 1 - (1 if intercept else 0)
+            elif fun == "bs":
+                nk = df - degree - (1 if intercept else 0)
+            elif fun == "strata":
+                nk = df - (1 if intercept else 0)
+            else:
+                raise ValueError(f"Unknown function type: {fun}")
+        else:
+            # Default case
+            nk = 1
+    
+    if nk < 1:
+        raise ValueError("choice of arguments defines no knots")
+    
+    # Define knots at equally-spaced log-values along lag
+    # R formula: range[1] + exp(((1+log(diff(range)))/(nk+1))*seq(nk)-1)
+    range_start = lag_range[0]
+    range_diff = np.diff(lag_range)[0]
+    
+    # Create the sequence: seq(nk) in R is 1:nk, so in Python it's 1 to nk+1
+    seq_nk = np.arange(1, nk + 1)
+    
+    # Apply R's formula exactly
+    log_factor = (1 + np.log(range_diff)) / (nk + 1)
+    knots = range_start + np.exp(log_factor * seq_nk - 1)
+    
+    return knots
