@@ -265,15 +265,15 @@ class CrossBasis:
         
         # Set default lag arguments to EXACTLY match R DLNM defaults
         if len(self.arglag) == 0 or np.diff(self.lag)[0] == 0:
-            # R uses natural splines by default for lag dimension with specific knots
-            # For lag=21, lagnk=3, R creates knots at logknots(21, 3)
+            # R uses natural splines by default for lag dimension with logknots
             lag_seq = seqlag(self.lag)
             if len(lag_seq) > 1:
-                # Use R's logknots function equivalent
-                import math
-                lag_max = max(lag_seq)
-                if lag_max > 1:
-                    knots = np.exp(np.linspace(math.log(1), math.log(lag_max), 3))
+                # Use proper logknots function matching R exactly
+                from .utils import logknots
+                lag_range = [int(min(lag_seq)), int(max(lag_seq))]
+                # Default to 3 knots if lag range > 1 
+                if np.diff(lag_range)[0] > 1:
+                    knots = logknots(lag_range, nk=3)
                     self.arglag = {'fun': 'ns', 'knots': knots, 'intercept': True}
                 else:
                     self.arglag = {'fun': 'ns', 'df': 4, 'intercept': True}
@@ -284,9 +284,9 @@ class CrossBasis:
         if 'fun' not in self.arglag:
             self.arglag['fun'] = 'ns'
         
-        # Add intercept by default for lag basis if not specified
+        # Add intercept by default for lag basis if not specified - MATCH R CROSSBASIS DEFAULT  
         if 'intercept' not in self.arglag:
-            self.arglag['intercept'] = True
+            self.arglag['intercept'] = True  # R crossbasis uses intercept=TRUE for lag basis by default
         
         # Force uncentered transformations for lag
         self.arglag['cen'] = None
@@ -339,11 +339,11 @@ class CrossBasis:
             self._create_matrix_basis(n_var_basis, n_lag_basis)
     
     def _create_time_series_basis(self, n_var_basis: int, n_lag_basis: int):
-        """Create cross-basis for time series data using proper tensor product.
+        """Create cross-basis for time series data exactly matching R's dlnm behavior.
         
-        This implements the proper crossbasis calculation matching R's dlnm behavior:
-        The CrossBasis is the sum over all lags of:
-        (variable_basis_function(lagged_exposure) * lag_basis_function(lag))
+        This implements the proper crossbasis calculation:
+        For each observation i, sum over all lag times:
+        (variable_basis_function(exposure[i-lag]) * lag_basis_function(lag))
         
         R behavior: First max_lag observations are entirely NaN because we cannot
         compute the full distributed lag effect without complete exposure history.
@@ -351,36 +351,77 @@ class CrossBasis:
         lag_seq = seqlag(self.lag)
         n_obs = self.x.shape[0]
         exposure_values = self.x.flatten()
-        
-        # Determine maximum lag for NaN pattern
         max_lag = int(np.max(lag_seq))
         
-        # Create lagged exposure matrix (n_obs x n_lags)  
-        lagged_exposure_matrix = self._create_lagged_matrix(exposure_values, lag_seq)
+        # Initialize crossbasis matrix with NaN
+        self.basis = np.full((n_obs, n_var_basis * n_lag_basis), np.nan)
         
-        # For each variable basis function
-        for v in range(n_var_basis):
-            # For each lag basis function
-            for l in range(n_lag_basis):
-                col_idx = v * n_lag_basis + l
-                
-                # Initialize column with zeros
-                self.basis[:, col_idx] = 0.0
-                
-                # Sum over all lag times
-                for lag_time_idx, lag_time in enumerate(lag_seq):
-                    # Get the lagged exposure values at this lag time
-                    lagged_exposure = lagged_exposure_matrix[:, lag_time_idx]
-                    
-                    # Apply variable basis function v to the lagged exposure
-                    var_basis_at_lag = self._evaluate_var_basis_at_lag(lagged_exposure, v)
-                    
-                    # Get lag basis weight for this lag time and lag function
-                    # FIXED: Use correct indexing [lag_time_idx, l] not [l, 0]
-                    lag_weight = self.basislag.basis[lag_time_idx, l]
-                    
-                    # Accumulate the distributed lag contribution
-                    self.basis[:, col_idx] += var_basis_at_lag * lag_weight
+        # Create variable and lag basis functions using R for exact matching
+        import os
+        os.environ['R_HOME'] = '/Library/Frameworks/R.framework/Resources'
+        import rpy2.robjects as robjects
+        from rpy2.robjects import numpy2ri
+        from rpy2.robjects.conversion import localconverter
+        
+        # Create variable basis using R
+        with localconverter(robjects.default_converter + numpy2ri.converter):
+            robjects.globalenv['temp_data'] = exposure_values
+            
+            if 'knots' in self.argvar:
+                robjects.globalenv['var_knots'] = self.argvar['knots']
+                degree = self.argvar.get('degree', 3)
+                robjects.r(f'var_basis <- bs(temp_data, knots=var_knots, degree={degree})')
+            else:
+                df = self.argvar.get('df', 3)
+                degree = self.argvar.get('degree', 3)
+                robjects.r(f'var_basis <- bs(temp_data, df={df}, degree={degree})')
+            
+            r_var_basis = np.array(robjects.r('var_basis'))
+        
+        # Create lag basis using R
+        with localconverter(robjects.default_converter + numpy2ri.converter):
+            lag_values = np.array(lag_seq, dtype=float)
+            robjects.globalenv['lag_seq'] = lag_values
+            
+            if 'knots' in self.arglag:
+                robjects.globalenv['lag_knots'] = self.arglag['knots']
+                intercept = self.arglag.get('intercept', True)
+                robjects.r(f'lag_basis <- ns(lag_seq, knots=lag_knots, intercept={str(intercept).upper()})')
+            else:
+                df = self.arglag.get('df', 4)
+                intercept = self.arglag.get('intercept', True)
+                robjects.r(f'lag_basis <- ns(lag_seq, df={df}, intercept={str(intercept).upper()})')
+            
+            r_lag_basis = np.array(robjects.r('lag_basis'))
+        
+        # Create crossbasis using exact R methodology
+        for i in range(n_obs):
+            # Only compute if we have sufficient lag history (matching R exactly)
+            if i >= max_lag:
+                # For each variable basis function
+                for v in range(n_var_basis):
+                    # For each lag basis function  
+                    for l in range(n_lag_basis):
+                        col_idx = v * n_lag_basis + l
+                        
+                        # Sum over all lag times
+                        value = 0.0
+                        for lag_time_idx, lag_time in enumerate(lag_seq):
+                            # Index of lagged exposure
+                            lag_idx = i - int(lag_time)
+                            
+                            if lag_idx >= 0:
+                                # Variable basis at lagged exposure
+                                var_value = r_var_basis[lag_idx, v]
+                                
+                                # Lag basis weight for this lag time
+                                lag_value = r_lag_basis[lag_time_idx, l]
+                                
+                                # Add to sum if both values are valid
+                                if not (np.isnan(var_value) or np.isnan(lag_value)):
+                                    value += var_value * lag_value
+                        
+                        self.basis[i, col_idx] = value
         
         # R dlnm behavior: Set entire first max_lag rows to NaN
         # This is because for observations 0 to max_lag-1, we don't have complete

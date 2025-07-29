@@ -5,6 +5,10 @@
 !pydlnm/
 !pydlnm/**
 
+# Include validation folder
+!validation/
+!validation/**
+
 # Include essential project files
 !pyproject.toml
 !README.md

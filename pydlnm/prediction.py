@@ -147,17 +147,43 @@ class CrossPred:
             self.model_link = model_link
             self.model_class = 'Unknown'
         
-        # Validate coefficient and vcov dimensions
+        # Handle reduced coefficients (when coef length < basis columns)
         basis_ncol = basis.shape[1]
-        if len(self.coefficients) < basis_ncol:
-            raise ValueError(f"Coefficients length ({len(self.coefficients)}) < basis columns ({basis_ncol})")
+        coef_len = len(self.coefficients)
         
-        if self.vcov.shape[0] < basis_ncol or self.vcov.shape[1] < basis_ncol:
-            raise ValueError(f"Variance-covariance matrix shape {self.vcov.shape} too small for basis")
-        
-        # Trim to basis size
-        self.coefficients = self.coefficients[:basis_ncol]
-        self.vcov = self.vcov[:basis_ncol, :basis_ncol]
+        if coef_len < basis_ncol:
+            # Reduced coefficients detected - use variable basis only
+            print(f"Detected reduced coefficients ({coef_len}) for basis ({basis_ncol})")
+            
+            if hasattr(basis, 'argvar') and isinstance(basis, CrossBasis):
+                # Create variable basis from cross-basis parameters
+                print("Creating variable basis from cross-basis argvar parameters")
+                
+                # Determine prediction values first
+                temp_predvar, temp_cen = self._setup_predictions(at, from_val, to_val, by, cen)
+                
+                # Create variable basis for predictions
+                from .basis import OneBasis
+                self.variable_basis = OneBasis(temp_predvar, **basis.argvar)
+                
+                if self.variable_basis.shape[1] != coef_len:
+                    raise ValueError(f"Variable basis ({self.variable_basis.shape[1]}) doesn't match coefficients ({coef_len})")
+                
+                self.reduced_coefficients = True
+                self.original_basis = basis
+                print(f"Variable basis created: {self.variable_basis.shape}")
+                
+            else:
+                raise ValueError(f"Cannot handle reduced coefficients for basis type {type(basis)}")
+        else:
+            # Full coefficients - use normal approach
+            if self.vcov.shape[0] < basis_ncol or self.vcov.shape[1] < basis_ncol:
+                raise ValueError(f"Variance-covariance matrix shape {self.vcov.shape} too small for basis")
+            
+            # Trim to basis size
+            self.coefficients = self.coefficients[:basis_ncol]
+            self.vcov = self.vcov[:basis_ncol, :basis_ncol]
+            self.reduced_coefficients = False
         
         # Set prediction parameters
         self.bylag = bylag
@@ -242,7 +268,10 @@ class CrossPred:
     def _create_prediction_matrix(self, predvar: np.ndarray, predlag: np.ndarray):
         """Create the design matrix for predictions."""
         
-        if self.basis_type == 'cb':
+        if hasattr(self, 'reduced_coefficients') and self.reduced_coefficients:
+            # Use variable basis only for reduced coefficients
+            self.Xpred = self._create_reduced_prediction_matrix(predvar, predlag)
+        elif self.basis_type == 'cb':
             # Cross-basis prediction matrix
             self.Xpred = self._create_crossbasis_prediction_matrix(predvar, predlag)
         elif self.basis_type == 'one':
@@ -250,6 +279,37 @@ class CrossPred:
             self.Xpred = self._create_onebasis_prediction_matrix(predvar, predlag)
         else:
             raise NotImplementedError(f"Prediction matrix for {self.basis_type} not implemented")
+    
+    def _create_reduced_prediction_matrix(self, predvar: np.ndarray, predlag: np.ndarray) -> np.ndarray:
+        """Create prediction matrix for reduced coefficients (variable basis only)."""
+        
+        # For reduced coefficients, use the variable basis only
+        # The coefficients represent overall cumulative effects
+        
+        # Use the variable basis that was created during initialization
+        basis_matrix = self.variable_basis.basis
+        
+        # Apply centering if specified
+        if self.cen is not None:
+            from .basis import OneBasis
+            cen_basis = OneBasis([self.cen], **self.original_basis.argvar)
+            basis_matrix = basis_matrix - cen_basis.basis
+        
+        # For reduced coefficients, we typically only have one "lag" (overall effect)
+        # So we replicate the basis matrix for each lag value requested
+        n_lag = len(predlag)
+        n_var = len(predvar)
+        n_basis = basis_matrix.shape[1]
+        
+        # Create prediction matrix: each lag gets the same variable basis
+        Xpred = np.zeros((n_var * n_lag, n_basis))
+        
+        for i in range(n_var):
+            for j in range(n_lag):
+                row_idx = i * n_lag + j
+                Xpred[row_idx, :] = basis_matrix[i, :]
+        
+        return Xpred
     
     def _create_crossbasis_prediction_matrix(self, predvar: np.ndarray, predlag: np.ndarray) -> np.ndarray:
         """Create prediction matrix for cross-basis."""
@@ -301,38 +361,68 @@ class CrossPred:
     def _generate_overall_predictions(self):
         """Generate overall cumulative predictions."""
         
-        # Use integer lags for overall predictions
-        predlag_int = seqlag(self.lag)
-        
-        # Create prediction matrix for integer lags
-        self._create_prediction_matrix(self.predvar, predlag_int)
-        
-        # Compute overall effects by summing across lags
-        Xpred_all = np.zeros((len(self.predvar), self.coefficients.shape[0]))
-        
-        if self.cumul:
-            # Initialize cumulative arrays
-            self.cumfit = np.zeros((len(self.predvar), len(predlag_int)))
-            self.cumse = np.zeros((len(self.predvar), len(predlag_int)))
-        
-        # Sum across lags
-        for i, lag_val in enumerate(predlag_int):
-            # Get indices for this lag
-            lag_indices = slice(i * len(self.predvar), (i + 1) * len(self.predvar))
-            Xpred_lag = self.Xpred[lag_indices, :]
+        if hasattr(self, 'reduced_coefficients') and self.reduced_coefficients:
+            # For reduced coefficients, overall effects are computed directly
+            # The coefficients already represent overall cumulative effects
             
-            Xpred_all += Xpred_lag
+            # Use the variable basis that was created during initialization
+            var_basis = self.variable_basis.basis
+            
+            # Apply centering if specified
+            if self.cen is not None:
+                from .basis import OneBasis
+                cen_basis = OneBasis([self.cen], **self.original_basis.argvar)
+                var_basis = var_basis - cen_basis.basis
+            
+            # Direct calculation for reduced coefficients
+            self.allfit = var_basis @ self.coefficients
+            allvar = np.sum((var_basis @ self.vcov) * var_basis, axis=1)
+            self.allse = np.sqrt(np.maximum(0, allvar))
+            
+            # For reduced coefficients, cumulative effects are not meaningful in the same way
+            # But we can create a dummy structure for compatibility
+            if self.cumul:
+                predlag_int = seqlag(self.lag)
+                self.cumfit = np.zeros((len(self.predvar), len(predlag_int)))
+                self.cumse = np.zeros((len(self.predvar), len(predlag_int)))
+                # Fill with overall effects as if they're the final cumulative effect
+                self.cumfit[:, -1] = self.allfit
+                self.cumse[:, -1] = self.allse
+                
+        else:
+            # Standard approach for full cross-basis coefficients
+            # Use integer lags for overall predictions
+            predlag_int = seqlag(self.lag)
+            
+            # Create prediction matrix for integer lags
+            self._create_prediction_matrix(self.predvar, predlag_int)
+            
+            # Compute overall effects by summing across lags
+            Xpred_all = np.zeros((len(self.predvar), self.coefficients.shape[0]))
             
             if self.cumul:
-                # Cumulative effects up to this lag
-                self.cumfit[:, i] = Xpred_all @ self.coefficients
-                cumvar = np.sum((Xpred_all @ self.vcov) * Xpred_all, axis=1)
-                self.cumse[:, i] = np.sqrt(np.maximum(0, cumvar))
-        
-        # Overall effects
-        self.allfit = Xpred_all @ self.coefficients
-        allvar = np.sum((Xpred_all @ self.vcov) * Xpred_all, axis=1)
-        self.allse = np.sqrt(np.maximum(0, allvar))
+                # Initialize cumulative arrays
+                self.cumfit = np.zeros((len(self.predvar), len(predlag_int)))
+                self.cumse = np.zeros((len(self.predvar), len(predlag_int)))
+            
+            # Sum across lags
+            for i, lag_val in enumerate(predlag_int):
+                # Get indices for this lag
+                lag_indices = slice(i * len(self.predvar), (i + 1) * len(self.predvar))
+                Xpred_lag = self.Xpred[lag_indices, :]
+                
+                Xpred_all += Xpred_lag
+                
+                if self.cumul:
+                    # Cumulative effects up to this lag
+                    self.cumfit[:, i] = Xpred_all @ self.coefficients
+                    cumvar = np.sum((Xpred_all @ self.vcov) * Xpred_all, axis=1)
+                    self.cumse[:, i] = np.sqrt(np.maximum(0, cumvar))
+            
+            # Overall effects
+            self.allfit = Xpred_all @ self.coefficients
+            allvar = np.sum((Xpred_all @ self.vcov) * Xpred_all, axis=1)
+            self.allse = np.sqrt(np.maximum(0, allvar))
     
     def _generate_confidence_intervals(self):
         """Generate confidence intervals for all predictions."""
@@ -404,7 +494,10 @@ class CrossPred:
 
 
 def crosspred(basis: Union[OneBasis, CrossBasis],
-              model: Any,
+              model: Any = None,
+              coef: Optional[np.ndarray] = None,
+              vcov: Optional[np.ndarray] = None,
+              model_link: Optional[str] = None,
               at: Optional[np.ndarray] = None,
               from_val: Optional[float] = None,
               to_val: Optional[float] = None,
@@ -469,7 +562,13 @@ def crosspred(basis: Union[OneBasis, CrossBasis],
         # statsmodels GLM
         coef = model.params
         vcov = model.cov_params()
-        model_link = getattr(model.model.family, 'link', None)
+        # Handle model.model.family or direct family attribute
+        if hasattr(model, 'model') and hasattr(model.model, 'family'):
+            model_link = getattr(model.model.family, 'link', None)
+        elif hasattr(model, 'family'):
+            model_link = getattr(model.family, 'link', None)
+        else:
+            model_link = None
         if model_link:
             model_link = model_link.__class__.__name__.lower()
     elif hasattr(model, 'coef_') and hasattr(model, 'predict'):
@@ -477,8 +576,11 @@ def crosspred(basis: Union[OneBasis, CrossBasis],
         coef = getattr(model, 'coef_', None)
         vcov = None  # sklearn doesn't provide covariance matrix
         model_link = 'identity'
+    elif coef is not None and vcov is not None:
+        # Direct coefficient specification
+        pass  # coef and vcov already set from function parameters
     else:
-        raise ValueError("Model type not recognized. Must be statsmodels or sklearn model.")
+        raise ValueError("Either 'model' or both 'coef' and 'vcov' must be provided.")
     
     # Create CrossPred object
     pred = CrossPred(

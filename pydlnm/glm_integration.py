@@ -325,7 +325,7 @@ def fit_dlnm_model(crossbasis: CrossBasis,
                    family: str = 'poisson',
                    other_vars: Optional[np.ndarray] = None,
                    backend: str = 'statsmodels',
-                   **kwargs) -> DLNMGLMInterface:
+                   **kwargs):
     """
     Convenience function to fit a DLNM model.
     
@@ -340,22 +340,28 @@ def fit_dlnm_model(crossbasis: CrossBasis,
     other_vars : array-like, optional
         Additional covariates
     backend : str, default='statsmodels'
-        Modeling backend: 'statsmodels' or 'sklearn'
+        Modeling backend: 'statsmodels', 'sklearn', or 'rpy2'
     **kwargs
         Additional arguments passed to fitting method
         
     Returns
     -------
-    dlnm_interface : DLNMGLMInterface
+    dlnm_interface : DLNMGLMInterface or Rpy2GLMInterface
         Fitted DLNM interface object
     """
-    interface = DLNMGLMInterface(crossbasis)
-    
-    if backend == 'statsmodels':
-        interface.fit_statsmodels(y, family=family, other_vars=other_vars, **kwargs)
-    elif backend == 'sklearn':
-        interface.fit_sklearn(y, model_type=family, other_vars=other_vars, **kwargs)
+    if backend == 'rpy2':
+        from .rpy2_glm import Rpy2GLMInterface
+        interface = Rpy2GLMInterface(crossbasis)
+        interface.fit_glm(y, family=family, other_vars=other_vars, **kwargs)
+        return interface
     else:
-        raise ValueError(f"Unknown backend: {backend}")
-    
-    return interface
+        interface = DLNMGLMInterface(crossbasis)
+        
+        if backend == 'statsmodels':
+            interface.fit_statsmodels(y, family=family, other_vars=other_vars, **kwargs)
+        elif backend == 'sklearn':
+            interface.fit_sklearn(y, model_type=family, other_vars=other_vars, **kwargs)
+        else:
+            raise ValueError(f"Unknown backend: {backend}. Choose from: 'statsmodels', 'sklearn', 'rpy2'")
+        
+        return interface

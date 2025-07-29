@@ -400,6 +400,79 @@ class MVMeta:
         return stats
 
 
+def blup(mv_model: MVMeta, vcov: bool = True) -> List[Dict]:
+    """
+    Calculate Best Linear Unbiased Predictors (BLUPs) from fitted MVMeta model
+    
+    This function replicates R's blup() function behavior, returning location-specific
+    coefficients that shrink individual estimates toward the meta-regression prediction.
+    
+    Parameters:
+    -----------
+    mv_model : MVMeta
+        Fitted multivariate meta-analysis model
+    vcov : bool, default True
+        Whether to return variance-covariance matrices for BLUPs
+        
+    Returns:
+    --------
+    List[Dict]
+        List of dictionaries, one per study/location, each containing:
+        - 'blup': BLUP coefficients for this location
+        - 'vcov': Variance-covariance matrix (if vcov=True)
+    """
+    if not mv_model.converged:
+        raise ValueError("MVMeta model has not converged")
+    
+    n_studies = mv_model.n_studies
+    n_outcomes = mv_model.n_outcomes
+    
+    # Get meta-regression predictions for each study
+    study_predictions = mv_model.X @ mv_model.coefficients  # Shape: (n_studies, n_outcomes)
+    
+    blup_results = []
+    
+    for i in range(n_studies):
+        # Individual study estimate
+        y_i = mv_model.y[i]  # Shape: (n_outcomes,)
+        S_i = mv_model.S[i]  # Shape: (n_outcomes, n_outcomes)
+        
+        # Meta-regression prediction for this study
+        pred_i = study_predictions[i]  # Shape: (n_outcomes,)
+        
+        # Calculate BLUP using shrinkage formula:
+        # BLUP_i = (S_i^-1 + Psi^-1)^-1 * (S_i^-1 * y_i + Psi^-1 * pred_i)
+        # where Psi is the between-study covariance matrix
+        
+        try:
+            S_i_inv = linalg.inv(S_i)
+            psi_inv = linalg.inv(mv_model.psi)
+            
+            # Combined precision matrix
+            precision = S_i_inv + psi_inv
+            precision_inv = linalg.inv(precision)
+            
+            # BLUP estimate (shrinkage toward meta-regression prediction)
+            blup_coef = precision_inv @ (S_i_inv @ y_i + psi_inv @ pred_i)
+            
+            result_dict = {'blup': blup_coef}
+            
+            if vcov:
+                # BLUP variance-covariance matrix
+                result_dict['vcov'] = precision_inv
+                
+        except linalg.LinAlgError:
+            # Fallback: use meta-regression prediction if matrices are singular
+            warnings.warn(f"Singular matrices for study {i}, using meta-regression prediction")
+            result_dict = {'blup': pred_i}
+            if vcov:
+                result_dict['vcov'] = mv_model.psi.copy()
+        
+        blup_results.append(result_dict)
+    
+    return blup_results
+
+
 def mvmeta(y: np.ndarray, S: np.ndarray, X: Optional[np.ndarray] = None, 
           method: str = "reml", control: Optional[Dict] = None) -> MVMeta:
     """

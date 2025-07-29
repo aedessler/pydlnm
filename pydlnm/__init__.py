@@ -25,12 +25,14 @@ __author__ = "Python DLNM Contributors"
 # Core classes
 from .basis import OneBasis, CrossBasis
 from .prediction import CrossPred, crosspred
-from .meta_analysis import MVMeta, mvmeta
+from .meta_analysis import MVMeta, mvmeta, blup
 from .centering import find_mmt, recenter_basis, CenteringManager
 from .attribution import attrdl, attr_heat_cold, AttributionManager
 
 # GLM integration and model fitting
 from .glm_integration import DLNMGLMInterface, fit_dlnm_model
+from .improved_glm import ImprovedGLMInterface, fit_enhanced_dlnm_model
+from .rpy2_glm import Rpy2GLMInterface
 from .crossreduce import CrossReduce, crossreduce, coef, vcov
 
 # Utility functions
@@ -70,6 +72,12 @@ from .penalized import (
     penalized_dlnm,
 )
 
+# Multi-location analysis
+from .multi_location import (
+    MultiLocationDLNM,
+    multi_location_dlnm_analysis,
+)
+
 # Data
 from . import data
 
@@ -80,6 +88,7 @@ __all__ = [
     "crosspred",
     "MVMeta",
     "mvmeta",
+    "blup",
     "find_mmt",
     "recenter_basis",
     "CenteringManager",
@@ -88,6 +97,9 @@ __all__ = [
     "AttributionManager",
     "DLNMGLMInterface",
     "fit_dlnm_model",
+    "ImprovedGLMInterface",
+    "fit_enhanced_dlnm_model",
+    "Rpy2GLMInterface",
     "CrossReduce",
     "crossreduce",
     "coef",
@@ -113,5 +125,7 @@ __all__ = [
     "PenalizedCrossBasis",
     "PenalizedDLNM", 
     "penalized_dlnm",
+    "MultiLocationDLNM",
+    "multi_location_dlnm_analysis",
     "data",
 ]

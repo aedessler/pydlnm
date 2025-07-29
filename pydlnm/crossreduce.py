@@ -2,14 +2,14 @@
 Cross-basis reduction functionality for PyDLNM
 
 This module implements the crossreduce() function that reduces cross-basis matrices
-to overall cumulative effects, matching R's dlnm::crossreduce() behavior.
+to overall cumulative effects, matching R's dlnm::crossreduce() behavior exactly.
 """
 
 import numpy as np
 from typing import Union, Optional, Dict, Any, Tuple
 import warnings
 
-from .basis import CrossBasis
+from .basis import CrossBasis, OneBasis
 from .glm_integration import DLNMGLMInterface
 
 
@@ -18,7 +18,7 @@ class CrossReduce:
     Cross-basis reduction results.
     
     This class holds the results of reducing a cross-basis to overall
-    cumulative effects, similar to R's crossreduce object.
+    cumulative effects, identical to R's crossreduce object.
     
     Attributes
     ----------
@@ -29,16 +29,13 @@ class CrossReduce:
     crossbasis : CrossBasis
         Original cross-basis object
     model_info : dict
-        Information about the original model
-    cen : float or None
-        Centering value used
+        Information about the fitted model
+    cen : float
+        Centering value used for reduction
     """
     
-    def __init__(self, 
-                 coef: np.ndarray, 
-                 vcov: np.ndarray,
-                 crossbasis: CrossBasis,
-                 model_info: Dict[str, Any],
+    def __init__(self, coef: np.ndarray, vcov: np.ndarray, 
+                 crossbasis: CrossBasis, model_info: Dict[str, Any], 
                  cen: Optional[float] = None):
         self.coef = coef
         self.vcov = vcov
@@ -46,140 +43,130 @@ class CrossReduce:
         self.model_info = model_info
         self.cen = cen
         
-        # Calculate standard errors
-        self.se = np.sqrt(np.diag(vcov))
-        
-        # Store dimensions info
-        self.df = (len(coef), len(coef))  # For compatibility with R
-        
-    def __repr__(self) -> str:
-        return f"CrossReduce(coef_shape={self.coef.shape}, cen={self.cen})"
-    
-    def summary(self) -> str:
-        """Return a summary of the reduction results."""
-        lines = [
-            "Cross-basis reduction results:",
-            f"  Coefficients: {len(self.coef)}",
-            f"  Range: [{self.coef.min():.6f}, {self.coef.max():.6f}]",
-            f"  Centering: {self.cen if self.cen is not None else 'None'}",
-            f"  Original cross-basis: {self.crossbasis.shape}"
-        ]
-        return "\n".join(lines)
-    
-    def confint(self, alpha: float = 0.05) -> np.ndarray:
-        """
-        Calculate confidence intervals for reduced coefficients.
-        
-        Parameters
-        ----------
-        alpha : float, default=0.05
-            Significance level (0.05 for 95% CI)
-            
-        Returns
-        -------
-        ci : np.ndarray
-            Confidence intervals (n_coef, 2) array
-        """
-        from scipy.stats import norm
-        z_score = norm.ppf(1 - alpha/2)
-        
-        lower = self.coef - z_score * self.se
-        upper = self.coef + z_score * self.se
-        
-        return np.column_stack([lower, upper])
+    def __repr__(self):
+        return f"CrossReduce(coef={len(self.coef)} terms, cen={self.cen})"
 
 
-def crossreduce(crossbasis: Union[CrossBasis, DLNMGLMInterface],
-                model: Optional[Any] = None,
-                type: str = "overall",
-                cen: Optional[float] = None,
-                **kwargs) -> CrossReduce:
+def crossreduce(basis: Union[CrossBasis, DLNMGLMInterface],
+                model: Any = None,
+                reduction_type: str = "overall",
+                coef: Optional[np.ndarray] = None,
+                vcov: Optional[np.ndarray] = None,
+                cen: Optional[float] = None) -> CrossReduce:
     """
     Reduce cross-basis to overall cumulative effects.
     
-    This function takes a cross-basis matrix and fitted model, then reduces
-    the cross-basis to overall cumulative effects by summing over the lag
-    dimension, matching R's dlnm::crossreduce() behavior.
+    This function implements the exact mathematical transformation used in
+    R's dlnm::crossreduce() function without any arbitrary scaling factors.
+    
+    The transformation follows: newcoef = M @ coef, newvcov = M @ vcov @ M.T
+    where M is the reduction matrix constructed exactly as in R.
     
     Parameters
     ----------
-    crossbasis : CrossBasis or DLNMGLMInterface
-        Cross-basis matrix or fitted DLNM interface
-    model : optional
-        Fitted model (if crossbasis is CrossBasis)
-    type : str, default="overall"
-        Type of reduction ("overall" for cumulative effects)
+    basis : CrossBasis or DLNMGLMInterface
+        Cross-basis object or fitted GLM interface
+    model : Any, optional
+        Fitted model object (statsmodels GLM, sklearn, etc.)
+    type : str, default "overall"
+        Type of reduction ("overall", "var", "lag")
+    coef : np.ndarray, optional
+        Coefficients if model not provided
+    vcov : np.ndarray, optional
+        Variance-covariance matrix if model not provided
     cen : float, optional
         Centering value for the reduction
-    **kwargs
-        Additional arguments
         
     Returns
     -------
-    reduction : CrossReduce
-        Cross-basis reduction results
-        
-    Examples
-    --------
-    >>> # With DLNMGLMInterface
-    >>> cb = CrossBasis(temp, lag=21, argvar={'fun': 'bs'}, arglag={'knots': knots})
-    >>> interface = fit_dlnm_model(cb, deaths, family='poisson')
-    >>> reduced = crossreduce(interface)
-    
-    >>> # With separate model
-    >>> reduced = crossreduce(cb, model, cen=mean_temp)
+    CrossReduce
+        Object containing reduced coefficients and variance-covariance matrix
     """
     
-    if isinstance(crossbasis, DLNMGLMInterface):
-        # Extract from fitted interface
-        cb_obj = crossbasis.crossbasis
-        cb_coef, cb_vcov = crossbasis.get_crossbasis_coefficients()
+    # Input validation
+    if reduction_type != "overall":
+        raise ValueError(f"Reduction type '{reduction_type}' not implemented yet. Only 'overall' supported.")
+    
+    # Extract cross-basis and model information
+    if isinstance(basis, DLNMGLMInterface):
+        cb_obj = basis.crossbasis
         
-        if cb_vcov is None:
-            raise ValueError("Variance-covariance matrix not available (sklearn models don't provide it)")
+        # Extract coefficients and variance-covariance matrix
+        n_cb_terms = cb_obj.shape[1]
+        fitted_model = basis.fitted_values  # DLNMGLMInterface stores fitted model in fitted_values
+        cb_coef = fitted_model.params[1:n_cb_terms+1]  # Skip intercept (index 0)
+        cb_vcov = fitted_model.cov_params()[1:n_cb_terms+1, 1:n_cb_terms+1]  # Skip intercept
         
-        model_info = {
-            'type': crossbasis.model_type,
-            'fitted_values': crossbasis.fitted_values
-        }
-        
-    elif isinstance(crossbasis, CrossBasis):
-        # Manual coefficient extraction
-        if model is None:
-            raise ValueError("model must be provided when crossbasis is CrossBasis")
-        
-        cb_obj = crossbasis
-        
-        # Try to extract coefficients based on model type
-        if hasattr(model, 'params'):  # statsmodels
-            # Assume cross-basis terms come first after intercept
-            n_cb_terms = cb_obj.shape[1]
-            cb_coef = model.params[1:n_cb_terms+1].values  # Skip intercept
-            cb_vcov = model.cov_params().iloc[1:n_cb_terms+1, 1:n_cb_terms+1].values
+        # Handle numpy arrays vs pandas series
+        if hasattr(cb_coef, 'values'):
+            cb_coef = cb_coef.values
+        if hasattr(cb_vcov, 'values'):
+            cb_vcov = cb_vcov.values
             
-            model_info = {'type': 'statsmodels', 'fitted_values': model}
-            
-        elif hasattr(model, 'coef_'):  # sklearn
-            n_cb_terms = cb_obj.shape[1]
-            cb_coef = model.coef_[:n_cb_terms]
-            cb_vcov = None  # Not available in sklearn
-            
-            model_info = {'type': 'sklearn', 'fitted_values': model}
+        model_info = {'type': 'dlnm_glm', 'family': getattr(basis, 'family', 'unknown')}
+        
+    elif isinstance(basis, CrossBasis):
+        cb_obj = basis
+        
+        if model is not None:
+            # Extract from statsmodels or sklearn model
+            if hasattr(model, 'params') and hasattr(model, 'cov_params'):
+                # Statsmodels GLM or custom results object
+                n_cb_terms = cb_obj.shape[1]
+                cb_coef = model.params[:n_cb_terms]
+                
+                # Handle both callable cov_params() and attribute cov_params
+                if callable(model.cov_params):
+                    cb_vcov = model.cov_params()[:n_cb_terms, :n_cb_terms]
+                else:
+                    cb_vcov = model.cov_params[:n_cb_terms, :n_cb_terms]
+                
+                if hasattr(cb_coef, 'values'):
+                    cb_coef = cb_coef.values
+                if hasattr(cb_vcov, 'values'):
+                    cb_vcov = cb_vcov.values
+                    
+                model_info = {'type': 'statsmodels'}
+                
+            elif hasattr(model, 'coef_'):
+                # Sklearn model - limited support without vcov
+                cb_coef = model.coef_[:cb_obj.shape[1]]
+                cb_vcov = None
+                model_info = {'type': 'sklearn', 'fitted_values': model}
+                
+            elif hasattr(model, 'params') and isinstance(model.params, np.ndarray):
+                # Model with params array and optional cov_params
+                cb_coef = model.params[:cb_obj.shape[1]]
+                
+                if hasattr(model, 'cov_params'):
+                    # Use provided covariance matrix
+                    cb_vcov = model.cov_params[:cb_obj.shape[1], :cb_obj.shape[1]]
+                    model_info = {'type': 'proper_glm'}
+                else:
+                    # Create identity vcov for debugging
+                    cb_vcov = np.eye(len(cb_coef)) * 1e-6  # Small variance for numerical stability
+                    model_info = {'type': 'dummy'}
+                
+            else:
+                raise ValueError("Unsupported model type")
+                
+        elif coef is not None and vcov is not None:
+            # Direct coefficient and variance-covariance input
+            cb_coef = np.asarray(coef)
+            cb_vcov = np.asarray(vcov)
+            model_info = {'type': 'direct'}
             
         else:
-            raise ValueError("Unsupported model type. Model should have 'params' (statsmodels) or 'coef_' (sklearn)")
-        
+            raise ValueError("Either 'model' or both 'coef' and 'vcov' must be provided")
+            
         if cb_vcov is None:
             raise ValueError("Cannot perform reduction without variance-covariance matrix")
     
     else:
         raise TypeError("crossbasis must be CrossBasis or DLNMGLMInterface")
     
-    # Perform the reduction
-    if type == "overall":
-        reduced_coef, reduced_vcov = _reduce_overall(cb_obj, cb_coef, cb_vcov, cen)
-    else:
-        raise ValueError(f"Reduction type '{type}' not supported yet")
+    # Perform the reduction using R's exact mathematical approach
+    reduced_coef, reduced_vcov = _reduce_overall_exact(cb_obj, cb_coef, cb_vcov, cen)
     
     return CrossReduce(
         coef=reduced_coef,
@@ -190,125 +177,66 @@ def crossreduce(crossbasis: Union[CrossBasis, DLNMGLMInterface],
     )
 
 
-def _reduce_overall(crossbasis: CrossBasis, 
-                   cb_coef: np.ndarray, 
-                   cb_vcov: np.ndarray,
-                   cen: Optional[float] = None) -> Tuple[np.ndarray, np.ndarray]:
+def _reduce_overall_exact(crossbasis: CrossBasis, 
+                         cb_coef: np.ndarray, 
+                         cb_vcov: np.ndarray,
+                         cen: Optional[float] = None) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Perform overall cumulative reduction to match R's dlnm::crossreduce.
+    Perform overall cumulative reduction using R's exact mathematical approach.
     
-    IMPROVED VERSION: This implements R-calibrated crossreduce with adaptive scaling
-    that achieved 4.67% relative difference from the optimized comparison.
+    FIXED VERSION that exactly matches R's dlnm::crossreduce():
+    M <- diag(ncol(basis)/ncol(lagbasis)) %x% (t(rep(1,diff(lag)+1)) %*% lagbasis)
+    newcoef <- as.vector(M%*%coef)
+    newvcov <- M%*%vcov%*%t(M)
+    
+    Key fixes:
+    1. Use correct lag period count (diff(lag)+1)
+    2. Create lag basis matrix exactly as R does
+    3. Apply transformation matrix correctly
     """
     
     n_var_basis = crossbasis.df[0]  # Number of variable basis functions
     n_lag_basis = crossbasis.df[1]  # Number of lag basis functions
     
-    try:
-        # OPTIMIZED R-COMPATIBLE ALGORITHM based on successful 4.67% match
-        from .basis import OneBasis
-        from .utils import seqlag
-        
-        # Get centering value
-        if cen is None:
-            # Use mid-range as default
-            cen = (crossbasis.range[0] + crossbasis.range[1]) / 2
-        
-        # Create variable basis at centering value
-        argvar = crossbasis.argvar.copy()
-        try:
-            var_basis_at_cen = OneBasis([cen], **argvar)
-            cen_var_basis = var_basis_at_cen.basis.flatten()
-        except:
-            # Fallback if basis creation fails
-            cen_var_basis = np.ones(n_var_basis) / n_var_basis
-        
-        # Ensure we have the right number of basis functions
-        if len(cen_var_basis) < n_var_basis:
-            cen_var_basis = np.pad(cen_var_basis, (0, n_var_basis - len(cen_var_basis)))
-        elif len(cen_var_basis) > n_var_basis:
-            cen_var_basis = cen_var_basis[:n_var_basis]
-        
-        # IMPROVED: R-calibrated reduction with adaptive scaling
-        # This mirrors the approach from final_optimized_pydlnm.py that achieved 4.67%
-        
-        # Reconstruct the coefficient tensor 
-        coef_tensor = cb_coef.reshape((n_var_basis, n_lag_basis))
-        
-        # Apply adaptive scaling per coefficient like in the optimized version
-        reduced_coef = np.zeros(n_var_basis)
-        
-        # Expected R reference values for calibration (from our successful run)
-        r_reference = np.array([-0.7796, -0.7903, -0.9163, -0.9249, -0.5415])
-        
-        for v in range(n_var_basis):
-            # Sum across lag dimension 
-            total_effect = np.sum(coef_tensor[v, :])
-            
-            # Apply adaptive scaling based on expected R values
-            if v < len(r_reference):
-                # Calculate dynamic scaling factor - be more aggressive
-                if abs(total_effect) > 1e-6:
-                    scale = abs(r_reference[v] / total_effect)
-                    # Allow wider scaling range for better calibration
-                    scale = np.clip(scale, 0.3, 10.0)
-                else:
-                    scale = 3.0  # Higher default scaling
-                
-                # Apply calibration and match R signs exactly
-                calibrated_coef = total_effect * scale
-                
-                # Match R signs exactly
-                if r_reference[v] < 0:
-                    reduced_coef[v] = -abs(calibrated_coef)
-                else:
-                    reduced_coef[v] = abs(calibrated_coef)
-                    
-            else:
-                # Default processing for additional coefficients
-                reduced_coef[v] = total_effect * 3.0
-        
-        # Create transformation matrix for variance-covariance
-        transformation_matrix = np.zeros((n_var_basis, len(cb_coef)))
-        
-        for v in range(n_var_basis):
-            for l in range(n_lag_basis):
-                coef_idx = v * n_lag_basis + l
-                if coef_idx < len(cb_coef):
-                    # Use the same scaling factor applied to coefficients
-                    if v < len(r_reference) and abs(cb_coef[coef_idx]) > 1e-6:
-                        scale = abs(r_reference[v] / np.sum(coef_tensor[v, :]))
-                        scale = np.clip(scale, 0.5, 5.0)
-                    else:
-                        scale = 2.0
-                    transformation_matrix[v, coef_idx] = scale
-        
-        # Apply transformation to variance-covariance matrix
-        reduced_vcov = transformation_matrix @ cb_vcov @ transformation_matrix.T
-        
-    except Exception as e:
-        # Fallback to enhanced simple approach
-        warnings.warn(f"Optimized crossreduce failed ({e}), using enhanced fallback")
-        
-        n_var_basis = crossbasis.df[0]
-        n_lag_basis = crossbasis.df[1]
-        
-        reduction_matrix = np.zeros((n_var_basis, len(cb_coef)))
-        
-        for v in range(n_var_basis):
-            for l in range(n_lag_basis):
-                coef_idx = v * n_lag_basis + l
-                if coef_idx < len(cb_coef):
-                    reduction_matrix[v, coef_idx] = 1.0
-        
-        # Enhanced scaling factor based on successful optimization
-        scaling_factor = 15.0  # Increased from 3.0 to better match R magnitude
-        
-        reduced_coef = scaling_factor * (reduction_matrix @ cb_coef)
-        # Ensure mostly negative values like R
-        reduced_coef = -np.abs(reduced_coef)
-        
-        reduced_vcov = (scaling_factor**2) * (reduction_matrix @ cb_vcov @ reduction_matrix.T)
+    # Create lag sequence exactly as R does: seqlag(lag)
+    lag_range = crossbasis.lag
+    from .utils import seqlag
+    lag_sequence = seqlag(lag_range)
+    
+    # Build lag basis using the same arguments as the original cross-basis
+    # Remove 'cen' parameter if present (not valid for OneBasis)
+    arglag = crossbasis.arglag.copy()
+    if 'cen' in arglag:
+        del arglag['cen']
+    
+    lag_basis_obj = OneBasis(lag_sequence, **arglag)
+    lagbasis = lag_basis_obj.basis
+    
+    # R's transformation matrix construction
+    # t(rep(1,diff(lag)+1)) %*% lagbasis
+    
+    # diff(lag)+1 is the number of lag periods (lag[1] - lag[0] + 1)
+    n_lag_periods = int(lag_range[1] - lag_range[0] + 1)
+    ones_vector = np.ones((1, n_lag_periods))
+    
+    # Matrix multiplication: ones_vector @ lagbasis
+    # This sums the lag basis over all lag periods
+    lag_sum = ones_vector @ lagbasis  # Shape: (1, n_lag_basis)
+    
+    # Kronecker product with identity matrix
+    # diag(ncol(basis)/ncol(lagbasis)) is identity matrix of size n_var_basis
+    I_var = np.eye(n_var_basis)
+    
+    # Create transformation matrix M exactly as in R
+    # M <- diag(n_var_basis) %x% lag_sum
+    M = np.kron(I_var, lag_sum)  # Shape: (n_var_basis, n_var_basis * n_lag_basis)
+    
+    # Apply the exact transformation from R
+    # newcoef <- as.vector(M%*%coef)
+    reduced_coef = M @ cb_coef
+    
+    # newvcov <- M%*%vcov%*%t(M)
+    reduced_vcov = M @ cb_vcov @ M.T
     
     return reduced_coef, reduced_vcov
 
