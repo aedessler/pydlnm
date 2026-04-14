@@ -14,7 +14,7 @@ Validated against the 2015 Gasparrini *Lancet* dataset (10 England & Wales regio
 | 2 | Prediction with R's BLUPs | Exact match (max\|ΔRR\| = 0.000000, corr = 1.0000000) |
 | 3 | Full pipeline (MVMeta → BLUP → RR curves) | Exact match (max\|ΔRR\| = 0.0000, corr = 1.000000) |
 
-![PyDLNM vs R DLNM Validation Results](../validation/results/rr_comparison_R_vs_Python.png)
+![PyDLNM vs R DLNM Validation Results](rr_comparison_R_vs_Python.png)
 
 *Temperature–mortality relative risk curves across all 10 England & Wales regions.
 Blue = R reference, red dashed = Python prediction using R's BLUPs, green dotted = full Python pipeline.

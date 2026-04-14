@@ -5,14 +5,17 @@
 !pydlnm/
 !pydlnm/**
 
-# Include validation folder
-!validation/
-!validation/**
-
 # Include essential project files
 !pyproject.toml
 !README.md
 !.gitignore
+
+# Python source files at repo root
+!*.py
+
+# Reference data directory
+!reference_data/
+!reference_data/**
 
 # dlnm-master folder (R reference package)
 dlnm-master/
@@ -142,6 +145,12 @@ $RECYCLE.BIN/
 *.Rhistory
 .RData
 .Ruserdata
-*.rds 
+*.rds
 *.R
 *.Rmd
+
+# Explicit whitelists that override the above exclusions (must come last)
+!generate_r_reference.R
+!reference_data/*.csv
+!reference_data/*.rds
+!rr_comparison_R_vs_Python.png
