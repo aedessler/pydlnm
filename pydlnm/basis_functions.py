@@ -6,32 +6,22 @@ lag non-linear models, including linear, polynomial, spline, and specialized fun
 """
 
 import numpy as np
-from scipy import interpolate
-from scipy.interpolate import BSpline
 from sklearn.preprocessing import PolynomialFeatures
 from typing import Union, Optional, List, Tuple, Any, Dict
 import warnings
 
-# Import enhanced spline implementations
-from .enhanced_splines import (
-    bs_enhanced, ns_enhanced, 
-    EnhancedBSplineBasis, EnhancedNaturalSplineBasis
-)
-
-# R-compatible splines implementation
+# R-compatible splines implementation - REQUIRED
 try:
     import rpy2.robjects as robjects
     from rpy2.robjects import numpy2ri
-    from rpy2.robjects import r as R
+    from rpy2.robjects.packages import importr
     from rpy2.robjects.conversion import localconverter
     
-    # Load R's splines package (without deprecated activate)
-    R('library(splines)')
-    
+    # Load R's splines package
+    splines = importr('splines')
     HAS_RPY2 = True
 except ImportError:
     HAS_RPY2 = False
-    warnings.warn("rpy2 not available. Using PyDLNM's native spline implementations. For exact R compatibility, install rpy2.")
 
 
 class BaseBasisFunction:
@@ -180,9 +170,10 @@ class PolynomialBasis(BaseBasisFunction):
 
 class SplineBasis(BaseBasisFunction):
     """
-    Natural spline basis function.
+    Natural spline basis function using R's splines::ns() via rpy2.
     
-    Creates natural cubic spline basis functions.
+    Creates natural cubic spline basis functions that exactly match
+    R's implementation for guaranteed compatibility.
     
     Parameters
     ----------
@@ -203,11 +194,19 @@ class SplineBasis(BaseBasisFunction):
         self.attributes['fun'] = 'ns'
         self.attributes['df'] = df
         self.attributes['intercept'] = intercept
+        self._check_rpy2()
+    
+    def _check_rpy2(self):
+        """Check if rpy2 is available"""
+        if not HAS_RPY2:
+            raise ImportError(
+                "rpy2 is required for spline functionality in PyDLNM. "
+                "Please install rpy2 with: pip install rpy2"
+            )
     
     def __call__(self, x: np.ndarray, **kwargs) -> np.ndarray:
         """
-        Generate natural spline basis matrix.
-        Uses R's splines::ns() when available for exact compatibility.
+        Generate natural spline basis matrix using R's splines::ns().
         
         Parameters
         ----------
@@ -221,59 +220,35 @@ class SplineBasis(BaseBasisFunction):
         """
         x = np.asarray(x, dtype=float)
         
-        # Use R's natural splines with modern rpy2 API for exact compatibility
-        try:
-            import rpy2.robjects as robjects
-            from rpy2.robjects.packages import importr
-            from rpy2.robjects import numpy2ri
-            from rpy2.robjects.conversion import localconverter
+        # Use R's natural splines for exact compatibility
+        with localconverter(robjects.default_converter + numpy2ri.converter):
+            if self.knots is not None:
+                knots_array = np.asarray(self.knots, dtype=float)
+                r_result = splines.ns(x, knots=knots_array, intercept=self.intercept)
+            elif self.df is not None:
+                r_result = splines.ns(x, df=self.df, intercept=self.intercept)
+            else:
+                r_result = splines.ns(x, df=4, intercept=self.intercept)
             
-            splines = importr('splines')
+            # Convert to numpy
+            basis_matrix = np.array(r_result)
             
-            # Use modern rpy2 conversion context
-            with localconverter(robjects.default_converter + numpy2ri.converter):
-                if self.knots is not None:
-                    knots_array = np.asarray(self.knots, dtype=float)
-                    r_result = splines.ns(x, knots=knots_array, intercept=self.intercept)
-                elif self.df is not None:
-                    r_result = splines.ns(x, df=self.df, intercept=self.intercept)
-                else:
-                    r_result = splines.ns(x, df=4, intercept=self.intercept)
-                
-                # Convert to numpy
-                basis_matrix = np.array(r_result)
-                
-                # Store attributes if available
-                if hasattr(r_result, 'attributes'):
-                    r_attrs = dict(r_result.attributes.items())
-                    if 'knots' in r_attrs:
-                        self.internal_knots = np.array(r_attrs['knots'])
-                
-                return basis_matrix
-                
-        except Exception as e:
-            warnings.warn(f"R natural spline failed, falling back to PyDLNM implementation: {e}")
-        
-        # Fallback to enhanced implementation
-        basis_matrix, enhanced_attrs = ns_enhanced(
-            x,
-            df=self.df,
-            knots=self.knots,
-            intercept=self.intercept
-        )
-        
-        # Update attributes with enhanced information
-        self.attributes.update(enhanced_attrs)
-        
-        return basis_matrix
+            # Store attributes if available
+            if hasattr(r_result, 'attributes'):
+                r_attrs = dict(r_result.attributes.items())
+                if 'knots' in r_attrs:
+                    self.internal_knots = np.array(r_attrs['knots'])
+            
+            return basis_matrix
 
 
 class BSplineBasis(BaseBasisFunction):
     """
-    B-spline basis function.
-    
-    Creates B-spline basis functions without natural constraints.
-    
+    B-spline basis function using R's splines::bs() via rpy2.
+
+    Creates B-spline basis functions that exactly match R's implementation
+    for guaranteed compatibility.
+
     Parameters
     ----------
     df : int, default=4
@@ -284,26 +259,44 @@ class BSplineBasis(BaseBasisFunction):
         Interior knot positions. If None, uses quantiles
     intercept : bool, default=False
         Whether to include an intercept column
+    Boundary_knots : array-like, optional
+        Boundary knots (min, max of training data).  Maps to R's
+        Boundary.knots argument.  When supplied, predictions outside
+        the training range use the same boundary knots as training,
+        matching R's crossbasis / mkXpred behaviour exactly.
     """
-    
-    def __init__(self, df: int = 4, degree: int = 3, 
+
+    def __init__(self, df: int = 4, degree: int = 3,
                  knots: Optional[np.ndarray] = None,
-                 intercept: bool = False, **kwargs):
-        super().__init__(df=df, degree=degree, knots=knots, 
+                 intercept: bool = False,
+                 Boundary_knots: Optional[np.ndarray] = None, **kwargs):
+        super().__init__(df=df, degree=degree, knots=knots,
                         intercept=intercept, **kwargs)
         self.df = df
-        # IMPROVED: Default to degree=2 for better R compatibility with bs()
-        self.degree = degree if degree != 3 else 2  # R's bs() commonly uses degree=2
+        self.degree = degree
         self.knots = knots
         self.intercept = intercept
+        self.Boundary_knots = (np.asarray(Boundary_knots, dtype=float)
+                               if Boundary_knots is not None else None)
         self.attributes['fun'] = 'bs'
         self.attributes['df'] = df
         self.attributes['degree'] = degree
         self.attributes['intercept'] = intercept
+        if self.Boundary_knots is not None:
+            self.attributes['Boundary_knots'] = self.Boundary_knots
+        self._check_rpy2()
+    
+    def _check_rpy2(self):
+        """Check if rpy2 is available"""
+        if not HAS_RPY2:
+            raise ImportError(
+                "rpy2 is required for spline functionality in PyDLNM. "
+                "Please install rpy2 with: pip install rpy2"
+            )
     
     def __call__(self, x: np.ndarray, **kwargs) -> np.ndarray:
         """
-        Generate B-spline basis matrix using enhanced implementation.
+        Generate B-spline basis matrix using R's splines::bs().
         
         Parameters
         ----------
@@ -319,7 +312,7 @@ class BSplineBasis(BaseBasisFunction):
     
     def transform(self, x: np.ndarray, **kwargs) -> np.ndarray:
         """
-        Sklearn-style transform interface for B-spline basis matrix using modern rpy2 API.
+        Generate B-spline basis matrix using R's splines::bs().
         
         Parameters
         ----------
@@ -332,55 +325,49 @@ class BSplineBasis(BaseBasisFunction):
             B-spline basis matrix
         """
         x = np.asarray(x, dtype=float)
-        
-        # Use R's B-splines with modern rpy2 API for exact compatibility
-        try:
-            import rpy2.robjects as robjects
-            from rpy2.robjects.packages import importr
-            from rpy2.robjects import numpy2ri
-            from rpy2.robjects.conversion import localconverter
-            
-            splines = importr('splines')
-            
-            # Use modern rpy2 conversion context
-            with localconverter(robjects.default_converter + numpy2ri.converter):
-                if self.knots is not None:
-                    knots_array = np.asarray(self.knots, dtype=float)
-                    r_result = splines.bs(x, knots=knots_array, degree=self.degree, intercept=self.intercept)
-                elif self.df is not None:
-                    r_result = splines.bs(x, df=self.df, degree=self.degree, intercept=self.intercept)
-                else:
-                    r_result = splines.bs(x, df=4, degree=self.degree, intercept=self.intercept)
-                
-                # Convert to numpy
-                basis_matrix = np.array(r_result)
-                
-                # Store attributes if available
-                if hasattr(r_result, 'attributes'):
-                    r_attrs = dict(r_result.attributes.items())
-                    if 'knots' in r_attrs:
-                        self.internal_knots = np.array(r_attrs['knots'])
-                    if 'degree' in r_attrs:
-                        self.degree = int(r_attrs['degree'])
-                
-                return basis_matrix
-                
-        except Exception as e:
-            warnings.warn(f"R B-spline failed, falling back to PyDLNM implementation: {e}")
-        
-        # Fallback to enhanced B-spline implementation
-        basis_matrix, enhanced_attrs = bs_enhanced(
-            x, 
-            df=self.df,
-            knots=self.knots,
-            degree=self.degree,
-            intercept=self.intercept
-        )
-        
-        # Update attributes with enhanced information
-        self.attributes.update(enhanced_attrs)
-        
-        return basis_matrix
+
+        # Use R's B-splines for exact compatibility.
+        # Pass Boundary.knots so predictions outside the training range use the
+        # same boundary knots as training — matching R's crossbasis/mkXpred.
+        boundary = (self.Boundary_knots if self.Boundary_knots is not None
+                    else np.array([np.nanmin(x), np.nanmax(x)]))
+
+        with localconverter(robjects.default_converter + numpy2ri.converter):
+            robjects.globalenv['_bs_x']   = x
+            robjects.globalenv['_bs_bk']  = boundary
+            if self.knots is not None:
+                robjects.globalenv['_bs_ik'] = np.asarray(self.knots, dtype=float)
+                r_result = robjects.r(
+                    f'splines::bs(`_bs_x`, knots=`_bs_ik`, degree={int(self.degree)}, '
+                    f'intercept={"TRUE" if self.intercept else "FALSE"}, '
+                    f'Boundary.knots=`_bs_bk`)'
+                )
+            elif self.df is not None:
+                r_result = robjects.r(
+                    f'splines::bs(`_bs_x`, df={int(self.df)}, degree={int(self.degree)}, '
+                    f'intercept={"TRUE" if self.intercept else "FALSE"}, '
+                    f'Boundary.knots=`_bs_bk`)'
+                )
+            else:
+                r_result = robjects.r(
+                    f'splines::bs(`_bs_x`, df=4, degree={int(self.degree)}, '
+                    f'intercept={"TRUE" if self.intercept else "FALSE"}, '
+                    f'Boundary.knots=`_bs_bk`)'
+                )
+
+            basis_matrix = np.array(r_result)
+
+            # Cache boundary knots and internal knots from R's output
+            if hasattr(r_result, 'attributes'):
+                r_attrs = dict(r_result.attributes.items())
+                if 'knots' in r_attrs:
+                    self.internal_knots = np.array(r_attrs['knots'])
+                if 'degree' in r_attrs:
+                    self.degree = int(r_attrs['degree'])
+                if 'Boundary.knots' in r_attrs and self.Boundary_knots is None:
+                    self.Boundary_knots = np.array(r_attrs['Boundary.knots'])
+
+            return basis_matrix
 
 
 class StrataBasis(BaseBasisFunction):

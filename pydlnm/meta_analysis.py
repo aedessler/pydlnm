@@ -1,500 +1,445 @@
 """
 Meta-analysis functionality for PyDLNM
 
-Implements multivariate meta-analysis methods equivalent to R's mvmeta package
-for pooling results from multiple locations/studies in DLNM analysis.
+Implements multivariate meta-analysis equivalent to R's mvmeta package.
+Algorithm matches R's mvmeta exactly:
+  - Psi parameterised as L @ L.T (lower-Cholesky) → always PSD
+  - Per-study Cholesky whitening (no big block-diagonal V matrix)
+  - REML log-det computed from per-study Cholesky diagonals
+  - BLUP vcov includes fixed-effects uncertainty (X @ vcov(beta) @ X.T term)
 """
 
 import numpy as np
-import pandas as pd
 from scipy import linalg
 from scipy.optimize import minimize
-from typing import List, Dict, Optional, Tuple, Union
+from typing import List, Dict, Optional
 import warnings
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Helpers matching R's internal functions
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _par2Psi(par: np.ndarray, k: int) -> np.ndarray:
+    """
+    Convert parameter vector to Psi using L @ L.T Cholesky parameterisation.
+    Matches R mvmeta's par2Psi(..., bscov='unstr').
+
+    par has k*(k+1)/2 elements (lower triangle, column-major like R's lower.tri).
+    """
+    L = np.zeros((k, k))
+    L[np.tril_indices(k)] = par          # lower triangle including diagonal
+    return L @ L.T
+
+
+def _Psi2par(Psi: np.ndarray) -> np.ndarray:
+    """Extract parameter vector from Psi via Cholesky factorisation."""
+    try:
+        L = np.linalg.cholesky(Psi)
+    except np.linalg.LinAlgError:
+        # Near-singular: add small ridge
+        L = np.linalg.cholesky(Psi + np.eye(Psi.shape[0]) * 1e-8)
+    return L[np.tril_indices(Psi.shape[0])]
+
+
+def _glsfit(Xlist, ylist, Slist, Psi, onlycoef=False):
+    """
+    GLS fit using per-study Cholesky whitening.
+    Matches R's glsfit() in mvmeta.
+
+    Xlist : list of (k, p) arrays   — per-study design matrices
+    ylist : list of (k,) arrays     — per-study outcome vectors
+    Slist : list of (k, k) arrays   — per-study within-study covariances
+    Psi   : (k, k)                  — between-study covariance
+    """
+    k = Psi.shape[0]
+    Sigma_list, invU_list, invtUX_list, invtUy_list = [], [], [], []
+
+    for S_i, X_i, y_i in zip(Slist, Xlist, ylist):
+        Sigma_i = S_i + Psi
+        try:
+            U_i = np.linalg.cholesky(Sigma_i).T   # upper triangular: U_i.T @ U_i = Sigma_i
+        except np.linalg.LinAlgError:
+            U_i = np.linalg.cholesky(Sigma_i + np.eye(k) * 1e-8).T
+        invU_i = linalg.solve_triangular(U_i, np.eye(k))  # U_i^{-1}
+        # whitened: invU_i.T @ X_i,  invU_i.T @ y_i
+        invtUX_i = invU_i.T @ X_i
+        invtUy_i = invU_i.T @ y_i
+        Sigma_list.append(Sigma_i)
+        invU_list.append(invU_i)
+        invtUX_list.append(invtUX_i)
+        invtUy_list.append(invtUy_i)
+
+    invtUX = np.vstack(invtUX_list)       # (n*k, p)
+    invtUy = np.concatenate(invtUy_list)  # (n*k,)
+
+    coef = np.linalg.lstsq(invtUX, invtUy, rcond=None)[0]  # (p,)
+
+    if onlycoef:
+        return coef
+
+    return dict(coef=coef, Sigma_list=Sigma_list, invU_list=invU_list,
+                invtUX_list=invtUX_list, invtUX=invtUX, invtUy=invtUy)
+
+
+def _reml_fn(par, k, Xlist, ylist, Slist):
+    """
+    REML negative log-profile-likelihood.
+    Matches R's remlprof.fn in mvmeta.
+    """
+    Psi = _par2Psi(par, k)
+    try:
+        gls = _glsfit(Xlist, ylist, Slist, Psi, onlycoef=False)
+    except Exception:
+        return 1e10
+
+    coef = gls['coef']
+    n_params = len(coef)
+
+    # pdet1: -sum of log(diag(U_i))  (= -0.5 * log|Sigma_i| per study)
+    pdet1 = 0.0
+    for invU_i in gls['invU_list']:
+        # U_i = inv(invU_i),  diag(U_i) = 1/diag(invU_i)
+        pdet1 += np.sum(np.log(np.abs(np.diag(invU_i))))  # = -sum log diag(U_i)
+
+    # pdet2: -log|X.T W X|  (REML correction for estimating fixed effects)
+    tXWX = sum(invtUX_i.T @ invtUX_i for invtUX_i in gls['invtUX_list'])
+    try:
+        pdet2 = -np.sum(np.log(np.diag(np.linalg.cholesky(tXWX))))
+    except np.linalg.LinAlgError:
+        return 1e10
+
+    # pres: residual sum of squares (quadratic form)
+    residuals = gls['invtUy'] - gls['invtUX'] @ coef
+    pres = -0.5 * np.dot(residuals, residuals)
+
+    # constant (omit: doesn't affect optimisation)
+    nall = sum(len(y) for y in ylist)
+    pconst = -0.5 * (nall - n_params) * np.log(2 * np.pi)
+
+    reml = pconst + pdet1 + pdet2 + pres
+    return -reml   # minimise negative log-likelihood
+
+
+def _reml_gr(par, k, Xlist, ylist, Slist):
+    """
+    Analytical REML gradient w.r.t. par (lower-Cholesky elements of Psi).
+    Matches R's gradchol.reml in mvmeta.
+
+    Derivative of REML log-likelihood w.r.t. par[i] where par[i] = L[r,c] (r>=c):
+      grad[i] = 0.5 * sum_j { r_j.T @ W_j @ dPsi @ W_j @ r_j
+                               - tr(W_j @ dPsi)
+                               + tr(invtXWXtot @ X_j.T @ W_j @ dPsi @ W_j @ X_j) }
+    where W_j = Sigma_j^{-1} and dPsi = d(Psi)/d(par[i]) = L[:,c] e_r.T + e_r L[:,c].T
+    (with e_r the r-th basis vector, L lower-Cholesky factor).
+    """
+    L = np.zeros((k, k))
+    L[np.tril_indices(k)] = par
+    Psi = L @ L.T
+
+    try:
+        gls = _glsfit(Xlist, ylist, Slist, Psi, onlycoef=False)
+    except Exception:
+        return np.zeros_like(par)
+
+    coef = gls['coef']
+    invSigma_list = [invU_i @ invU_i.T for invU_i in gls['invU_list']]
+
+    tXWX = sum(Xi.T @ Xi for Xi in gls['invtUX_list'])
+    try:
+        invtXWXtot = np.linalg.inv(tXWX)
+    except np.linalg.LinAlgError:
+        return np.zeros_like(par)
+
+    res_list = [y_i - X_i @ coef for X_i, y_i in zip(Xlist, ylist)]
+
+    tril_rows, tril_cols = np.tril_indices(k)
+    grad = np.zeros(len(par))
+
+    for i, (r, c) in enumerate(zip(tril_rows, tril_cols)):
+        # Psi = L @ L.T, so dPsi/d(L[r,c]) has element [a,b]:
+        #   = L[b,c] if a==r, else L[a,c] if b==r, else 0
+        # In matrix form: D = e_r @ L[:,c].T + L[:,c] @ e_r.T
+        # Matches R's gradchol.reml formula with U = L.T (upper Cholesky).
+        e_r = np.zeros(k); e_r[r] = 1.0
+        L_col_c = L[:, c]   # column c of L
+
+        D = np.outer(e_r, L_col_c) + np.outer(L_col_c, e_r)
+
+        g = 0.0
+        for j, (invSigma_j, res_j, invtUX_j, X_j) in enumerate(
+                zip(invSigma_list, res_list, gls['invtUX_list'], Xlist)):
+            W_D = invSigma_j @ D @ invSigma_j
+            F = res_j @ W_D @ res_j
+            G = np.trace(invSigma_j @ D)
+            H = np.trace(invtXWXtot @ X_j.T @ W_D @ X_j)
+            g += 0.5 * (F - G + H)
+        grad[i] = g
+
+    return -grad   # negative because we minimise negative log-likelihood
+
+
+def _igls_init(Xlist, ylist, Slist, k, n_iter=10):
+    """
+    IGLS initialisation for Psi. Matches R's initpar with igls.iter iterations.
+    Produces a better starting point for BFGS than a fixed small identity.
+    """
+    Psi = np.eye(k) * 0.001
+    npar = k * (k + 1) // 2
+
+    # indMat[a,b] = vech index of (a,b) element (0-based)
+    indMat = np.zeros((k, k), dtype=int)
+    idx = 0
+    for col in range(k):
+        for row in range(col, k):
+            indMat[row, col] = idx
+            indMat[col, row] = idx
+            idx += 1
+
+    for _ in range(n_iter):
+        try:
+            gls = _glsfit(Xlist, ylist, Slist, Psi, onlycoef=False)
+        except Exception:
+            break
+
+        coef = gls['coef']
+
+        # Build Z matrix (k^2 × npar) and per-study eΣ = Σ ⊗ Σ
+        # f_i = vec(outer(r_i, r_i)) - vec(S_i)
+        Z = np.zeros((k * k, npar))
+        for a in range(k):
+            for b in range(k):
+                Z[a * k + b, indMat[a, b]] = 1.0
+
+        invteUZ_accum = np.zeros((npar, npar))
+        invteUf_accum = np.zeros(npar)
+
+        for S_i, X_i, y_i, Sigma_i in zip(Slist, Xlist, ylist, gls['Sigma_list']):
+            r_i = y_i - X_i @ coef
+            f_i = (np.outer(r_i, r_i) - S_i).ravel()
+
+            # eΣ = Sigma_i ⊗ Sigma_i  (k^2 × k^2)
+            eSigma = np.kron(Sigma_i, Sigma_i)
+            try:
+                eU = np.linalg.cholesky(eSigma).T
+                inveU = linalg.solve_triangular(eU, np.eye(k * k))
+            except np.linalg.LinAlgError:
+                continue
+
+            invteUZ_i = inveU.T @ Z
+            invteUf_i = inveU.T @ f_i
+            invteUZ_accum += invteUZ_i.T @ invteUZ_i
+            invteUf_accum += invteUZ_i.T @ invteUf_i
+
+        try:
+            theta = np.linalg.solve(invteUZ_accum, invteUf_accum)
+        except np.linalg.LinAlgError:
+            break
+
+        # Reconstruct symmetric Psi from vech(theta)
+        Psi_new = np.zeros((k, k))
+        for j in range(npar):
+            # find (row,col) for index j
+            rows, cols = np.where(indMat == j)
+            for r, c in zip(rows, cols):
+                Psi_new[r, c] = theta[j]
+
+        # Project onto PSD cone
+        eigvals, eigvecs = np.linalg.eigh(Psi_new)
+        eigvals = np.maximum(eigvals, np.sqrt(np.finfo(float).eps))
+        Psi = eigvecs @ np.diag(eigvals) @ eigvecs.T
+
+    return Psi
+
+
+def _ml_fn(par, k, Xlist, ylist, Slist):
+    """ML negative log-likelihood."""
+    Psi = _par2Psi(par, k)
+    try:
+        gls = _glsfit(Xlist, ylist, Slist, Psi, onlycoef=False)
+    except Exception:
+        return 1e10
+
+    coef = gls['coef']
+    pdet1 = 0.0
+    for invU_i in gls['invU_list']:
+        pdet1 += np.sum(np.log(np.abs(np.diag(invU_i))))
+
+    residuals = gls['invtUy'] - gls['invtUX'] @ coef
+    pres = -0.5 * np.dot(residuals, residuals)
+
+    nall = sum(len(y) for y in ylist)
+    pconst = -0.5 * nall * np.log(2 * np.pi)
+
+    ml = pconst + pdet1 + pres
+    return -ml
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Public API
+# ─────────────────────────────────────────────────────────────────────────────
+
 class MVMeta:
     """
-    Multivariate meta-analysis for DLNM results
-    
-    Equivalent to R's mvmeta package for pooling location-specific results
-    from distributed lag non-linear models.
+    Multivariate meta-analysis matching R's mvmeta package.
+
+    Usage
+    -----
+    mv = MVMeta()
+    mv.fit(y, S, X)        # y: (n,k), S: (n,k,k), X: (n,p)
+    results = blup(mv)
     """
-    
+
     def __init__(self, method: str = "reml", control: Optional[Dict] = None):
-        """
-        Initialize MVMeta object
-        
-        Parameters:
-        -----------
-        method : str, default "reml"
-            Estimation method. Options: "reml", "ml", "fixed"
-        control : dict, optional
-            Control parameters for optimization
-        """
         self.method = method
         self.control = control or {}
-        self.coefficients = None
-        self.vcov = None
-        self.psi = None  # Between-study variance-covariance matrix
+        self.coefficients = None   # (p, k) — matches R's coef(mv) layout
+        self.vcov = None           # (p*k, p*k)
+        self.psi = None            # (k, k)
         self.loglik = None
         self.converged = False
-        self.fitted_values = None
-        self.residuals = None
-        
-    def fit(self, y: np.ndarray, S: np.ndarray, X: Optional[np.ndarray] = None) -> 'MVMeta':
+
+    def fit(self, y: np.ndarray, S: np.ndarray,
+            X: Optional[np.ndarray] = None) -> 'MVMeta':
         """
-        Fit multivariate meta-analysis model
-        
-        Parameters:
-        -----------
-        y : array-like, shape (n_studies, n_outcomes)
-            Matrix of effect estimates from each study
-        S : array-like, shape (n_studies, n_outcomes, n_outcomes) or (n_studies, n_outcomes)
-            Within-study variance-covariance matrices or variances
-        X : array-like, shape (n_studies, n_predictors), optional
-            Study-level covariates (meta-regression)
-            
-        Returns:
-        --------
-        self : MVMeta
-            Fitted model object
+        Parameters
+        ----------
+        y : (n_studies, k)
+        S : (n_studies, k, k)  within-study covariance matrices
+        X : (n_studies, p)     study-level covariates (meta-regression)
         """
-        y = np.asarray(y)
-        S = np.asarray(S)
-        
+        y = np.asarray(y, dtype=float)
+        S = np.asarray(S, dtype=float)
+
         if y.ndim == 1:
             y = y.reshape(-1, 1)
-            
-        n_studies, n_outcomes = y.shape
-        
-        # Handle S input format
-        if S.ndim == 2 and S.shape[1] == n_outcomes:
-            # Diagonal matrices from variances
-            S_matrices = np.zeros((n_studies, n_outcomes, n_outcomes))
-            for i in range(n_studies):
-                S_matrices[i] = np.diag(S[i])
-            S = S_matrices
-        elif S.ndim == 3:
-            # Already in matrix format
-            pass
-        else:
-            raise ValueError("S must be either (n_studies, n_outcomes) or (n_studies, n_outcomes, n_outcomes)")
-            
-        # Handle meta-regression
+
+        n, k = y.shape
+
+        if S.ndim == 2:
+            # Diagonal case: (n, k) variances → (n, k, k)
+            S3 = np.zeros((n, k, k))
+            for i in range(n):
+                S3[i] = np.diag(S[i])
+            S = S3
+
         if X is None:
-            X = np.ones((n_studies, 1))
+            X = np.ones((n, 1))
         else:
-            X = np.asarray(X)
+            X = np.asarray(X, dtype=float)
             if X.ndim == 1:
                 X = X.reshape(-1, 1)
-            if X.shape[0] != n_studies:
-                raise ValueError("X must have same number of rows as y")
-                
-        self.n_studies = n_studies
-        self.n_outcomes = n_outcomes
-        self.n_predictors = X.shape[1]
-        self.X = X
+
+        self.n, self.k, self.p = n, k, X.shape[1]
         self.y = y
         self.S = S
-        
-        # Fit the model based on method
-        if self.method == "fixed":
-            self._fit_fixed()
-        elif self.method in ["reml", "ml"]:
-            self._fit_random()
-        else:
-            raise ValueError(f"Unknown method: {self.method}")
-            
-        self.converged = True
-        return self
-    
-    def _fit_fixed(self):
-        """Fit fixed-effects meta-analysis model"""
-        # Fixed effects: no between-study heterogeneity
-        self.psi = np.zeros((self.n_outcomes, self.n_outcomes))
-        
-        # Stack data and create block-diagonal covariance matrix
-        y_vec = self.y.flatten(order='F')  # Column-major like R
-        X_expanded = np.kron(np.eye(self.n_outcomes), self.X)
-        
-        # Create block-diagonal within-study covariance matrix
-        V = np.zeros((self.n_studies * self.n_outcomes, self.n_studies * self.n_outcomes))
-        for i in range(self.n_studies):
-            start_idx = i * self.n_outcomes
-            end_idx = (i + 1) * self.n_outcomes
-            V[start_idx:end_idx, start_idx:end_idx] = self.S[i]
-        
-        # Weighted least squares estimation
-        try:
-            V_inv = linalg.inv(V)
-            XtV_inv = X_expanded.T @ V_inv
-            self.vcov = linalg.inv(XtV_inv @ X_expanded)
-            self.coefficients = self.vcov @ XtV_inv @ y_vec
-            
-            # Reshape coefficients to (n_predictors, n_outcomes)
-            self.coefficients = self.coefficients.reshape((self.n_predictors, self.n_outcomes), order='F')
-            
-            # Calculate fitted values and residuals
-            self.fitted_values = X_expanded @ self.coefficients.flatten(order='F')
-            self.residuals = y_vec - self.fitted_values
-            
-            # Calculate log-likelihood
-            self.loglik = -0.5 * (np.log(linalg.det(V)) + self.residuals.T @ V_inv @ self.residuals)
-            
-        except linalg.LinAlgError:
-            raise ValueError("Singular covariance matrix in fixed-effects model")
-    
-    def _fit_random(self):
-        """Fit random-effects meta-analysis model using REML or ML"""
-        
-        # Initialize between-study covariance matrix
-        psi_init = np.eye(self.n_outcomes) * 0.1
-        
-        # Optimize between-study variance parameters
-        if self.method == "reml":
-            objective = self._reml_objective
-        else:  # ML
-            objective = self._ml_objective
-        
-        # Vectorize psi for optimization (lower triangle + diagonal)
-        psi_vec_init = self._psi_to_vec(psi_init)
-        
+        self.X = X
+
+        # Per-study lists used throughout (matches R's list-based approach)
+        # Each X_i is (k, p) — kron(I_k, x_i.T) = I_k ⊗ x_i  shape (k, k*p)
+        # But R's glsfit uses X as (k × p) per study for meta-regression beta (k*p,)
+        # Actually R stacks the design as kron(I_k, X[i,]) giving (k, k*p) per study.
+        # We follow R's convention: per-study design = I_k ⊗ X[i,] = (k, p*k)
+        # and coef is a (p*k,) vector = vec(beta.T).
+        Xlist = [np.kron(np.eye(k), X[i:i+1]) for i in range(n)]  # (k, p*k) each
+        ylist = [y[i] for i in range(n)]
+        Slist = [S[i] for i in range(n)]
+
+        self._Xlist = Xlist
+        self._ylist = ylist
+        self._Slist = Slist
+
+        # IGLS initialization (matches R's initpar with igls.iter=10)
+        igls_iter = self.control.get('igls.iter', 10)
+        psi_init = _igls_init(Xlist, ylist, Slist, k, n_iter=igls_iter)
+        par_init = _Psi2par(psi_init)
+
+        obj = _reml_fn if self.method == 'reml' else _ml_fn
+        jac = _reml_gr if self.method == 'reml' else None
+
         result = minimize(
-            objective, 
-            psi_vec_init,
+            obj, par_init,
+            args=(k, Xlist, ylist, Slist),
+            jac=jac,
             method='BFGS',
-            options={'disp': self.control.get('showiter', False)}
+            options={'maxiter': self.control.get('maxiter', 500),
+                     'gtol': 1e-8,
+                     'disp': self.control.get('showiter', False)}
         )
-        
-        if result.success:
-            # Extract optimal psi
-            self.psi = self._vec_to_psi(result.x)
-            
-            # Estimate fixed effects with optimal psi
-            self._estimate_fixed_effects()
-            
-            # Store optimization results
-            self.loglik = -result.fun
-            self.converged = True
-        else:
-            # Fallback to simple estimates
-            warnings.warn("Optimization failed, using simple estimates")
-            self.psi = np.eye(self.n_outcomes) * 0.1
-            self._estimate_fixed_effects()
-            self.converged = False
-    
-    def _estimate_fixed_effects(self):
-        """Estimate fixed effects given between-study covariance psi"""
-        
-        # Create total covariance matrix (within + between study)
-        y_vec = self.y.flatten(order='F')
-        X_expanded = np.kron(np.eye(self.n_outcomes), self.X)
-        
-        # Total covariance matrix
-        V_total = np.zeros((self.n_studies * self.n_outcomes, self.n_studies * self.n_outcomes))
-        for i in range(self.n_studies):
-            start_idx = i * self.n_outcomes
-            end_idx = (i + 1) * self.n_outcomes
-            V_total[start_idx:end_idx, start_idx:end_idx] = self.S[i] + self.psi
-        
-        # Generalized least squares
-        try:
-            V_inv = linalg.inv(V_total)
-            XtV_inv = X_expanded.T @ V_inv
-            self.vcov = linalg.inv(XtV_inv @ X_expanded)
-            coef_vec = self.vcov @ XtV_inv @ y_vec
-            
-            # Reshape coefficients
-            self.coefficients = coef_vec.reshape((self.n_predictors, self.n_outcomes), order='F')
-            
-            # Calculate fitted values and residuals  
-            self.fitted_values = X_expanded @ coef_vec
-            self.residuals = y_vec - self.fitted_values
-            
-        except linalg.LinAlgError:
-            raise ValueError("Singular total covariance matrix")
-    
-    def _psi_to_vec(self, psi):
-        """Convert psi matrix to vector (lower triangle)"""
-        indices = np.tril_indices(self.n_outcomes)
-        return psi[indices]
-    
-    def _vec_to_psi(self, vec):
-        """Convert vector to psi matrix (symmetric)"""
-        psi = np.zeros((self.n_outcomes, self.n_outcomes))
-        indices = np.tril_indices(self.n_outcomes)
-        psi[indices] = vec
-        psi = psi + psi.T - np.diag(np.diag(psi))
-        return psi
-    
-    def _reml_objective(self, psi_vec):
-        """REML objective function"""
-        try:
-            psi = self._vec_to_psi(psi_vec)
-            
-            # Ensure positive definiteness
-            eigenvals = linalg.eigvals(psi)
-            if np.any(eigenvals <= 0):
-                return 1e10
-            
-            # Create total covariance matrix
-            y_vec = self.y.flatten(order='F')
-            X_expanded = np.kron(np.eye(self.n_outcomes), self.X)
-            
-            V_total = np.zeros((self.n_studies * self.n_outcomes, self.n_studies * self.n_outcomes))
-            for i in range(self.n_studies):
-                start_idx = i * self.n_outcomes
-                end_idx = (i + 1) * self.n_outcomes
-                V_total[start_idx:end_idx, start_idx:end_idx] = self.S[i] + psi
-            
-            V_inv = linalg.inv(V_total)
-            XtV_inv = X_expanded.T @ V_inv
-            
-            # REML likelihood components
-            logdet_V = np.log(linalg.det(V_total))
-            logdet_XtVX = np.log(linalg.det(XtV_inv @ X_expanded))
-            
-            # Residual sum of squares
-            P = V_inv - V_inv @ X_expanded @ linalg.inv(XtV_inv @ X_expanded) @ XtV_inv
-            rss = y_vec.T @ P @ y_vec
-            
-            # REML objective (negative log-likelihood)
-            reml = 0.5 * (logdet_V + logdet_XtVX + rss)
-            
-            return reml
-            
-        except (linalg.LinAlgError, ValueError):
-            return 1e10
-    
-    def _ml_objective(self, psi_vec):
-        """ML objective function"""
-        try:
-            psi = self._vec_to_psi(psi_vec)
-            
-            # Ensure positive definiteness
-            eigenvals = linalg.eigvals(psi)
-            if np.any(eigenvals <= 0):
-                return 1e10
-            
-            # Create total covariance matrix and estimate effects
-            y_vec = self.y.flatten(order='F')
-            X_expanded = np.kron(np.eye(self.n_outcomes), self.X)
-            
-            V_total = np.zeros((self.n_studies * self.n_outcomes, self.n_studies * self.n_outcomes))
-            for i in range(self.n_studies):
-                start_idx = i * self.n_outcomes
-                end_idx = (i + 1) * self.n_outcomes
-                V_total[start_idx:end_idx, start_idx:end_idx] = self.S[i] + psi
-            
-            V_inv = linalg.inv(V_total)
-            XtV_inv = X_expanded.T @ V_inv
-            
-            # ML estimates
-            coef_vec = linalg.inv(XtV_inv @ X_expanded) @ XtV_inv @ y_vec
-            residuals = y_vec - X_expanded @ coef_vec
-            
-            # ML objective (negative log-likelihood)
-            ml = 0.5 * (np.log(linalg.det(V_total)) + residuals.T @ V_inv @ residuals)
-            
-            return ml
-            
-        except (linalg.LinAlgError, ValueError):
-            return 1e10
-    
-    def predict(self, X_new: Optional[np.ndarray] = None) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Make predictions for new studies
-        
-        Parameters:
-        -----------
-        X_new : array-like, optional
-            Covariate values for prediction. If None, uses intercept only.
-            
-        Returns:
-        --------
-        pred : ndarray
-            Predicted values
-        pred_se : ndarray  
-            Standard errors of predictions
-        """
-        if not self.converged:
-            raise ValueError("Model has not converged")
-            
-        if X_new is None:
-            X_new = np.ones((1, 1))
-        else:
-            X_new = np.asarray(X_new)
-            if X_new.ndim == 1:
-                X_new = X_new.reshape(1, -1)
-        
-        # Predictions
-        pred = X_new @ self.coefficients
-        
-        # Prediction variance (includes between-study heterogeneity)
-        pred_var = np.zeros((X_new.shape[0], self.n_outcomes, self.n_outcomes))
-        
-        for i in range(X_new.shape[0]):
-            x_i = X_new[i:i+1]
-            # Variance from fixed effects
-            X_block_i = np.kron(np.eye(self.n_outcomes), x_i)
-            var_fixed = X_block_i @ self.vcov @ X_block_i.T
-            var_fixed_matrix = var_fixed.reshape(self.n_outcomes, self.n_outcomes)
-            
-            # Add between-study heterogeneity
-            pred_var[i] = var_fixed_matrix + self.psi
-        
-        # Standard errors
-        pred_se = np.sqrt(np.array([np.diag(pred_var[i]) for i in range(X_new.shape[0])]))
-        
-        return pred, pred_se
-    
-    def summary(self) -> pd.DataFrame:
-        """Return summary of meta-analysis results"""
-        if not self.converged:
-            raise ValueError("Model has not converged")
-        
-        # Create summary DataFrame
-        coef_flat = self.coefficients.ravel()
-        se_flat = np.sqrt(np.diag(self.vcov))
-        
-        t_stat = coef_flat / se_flat
-        p_values = 2 * (1 - np.abs(t_stat))  # Approximate, should use t-distribution
-        
-        # Create parameter names
-        param_names = []
-        predictor_names = [f"X{i}" for i in range(self.n_predictors)]
-        outcome_names = [f"Y{i}" for i in range(self.n_outcomes)]
-        
-        for outcome in outcome_names:
-            for predictor in predictor_names:
-                param_names.append(f"{predictor}:{outcome}")
-        
-        summary_df = pd.DataFrame({
-            'Parameter': param_names,
-            'Estimate': coef_flat,
-            'Std.Error': se_flat,
-            't.value': t_stat,
-            'p.value': p_values,
-            'CI.lower': coef_flat - 1.96 * se_flat,
-            'CI.upper': coef_flat + 1.96 * se_flat
-        })
-        
-        return summary_df
-    
-    def heterogeneity_stats(self) -> Dict:
-        """Calculate heterogeneity statistics"""
-        if not self.converged:
-            raise ValueError("Model has not converged")
-        
-        # I-squared equivalent for multivariate case
-        # Simplified version - full implementation would be more complex
-        
-        stats = {
-            'psi': self.psi,
-            'tau2': np.diag(self.psi),  # Outcome-specific between-study variances
-            'loglik': self.loglik,
-            'converged': self.converged
-        }
-        
-        return stats
+
+        self.psi = _par2Psi(result.x, k)
+        self.loglik = -result.fun
+        self.converged = result.success
+
+        if not result.success:
+            warnings.warn(f"MVMeta optimisation did not fully converge: {result.message}")
+
+        # Final GLS for coefficients and vcov
+        gls = _glsfit(Xlist, ylist, Slist, self.psi, onlycoef=False)
+        coef_vec = gls['coef']          # (p*k,)
+
+        # vcov of beta_vec
+        tXWX = sum(Xi.T @ Xi for Xi in gls['invtUX_list'])
+        self._vcov_beta = np.linalg.inv(tXWX)   # (p*k, p*k)
+        self.vcov = self._vcov_beta
+
+        # Reshape coef to (k, p) then transpose to (p, k) matching R's coef(mv)
+        # coef_vec is ordered: [beta_{1,1}, beta_{1,2}, ..., beta_{1,k},
+        #                        beta_{2,1}, ..., beta_{p,k}]
+        # because Xlist[i] = kron(I_k, X[i,]) maps (p*k,) → k outcomes
+        self.coefficients = coef_vec.reshape(k, self.p).T   # (p, k)
+
+        return self
 
 
 def blup(mv_model: MVMeta, vcov: bool = True) -> List[Dict]:
     """
-    Calculate Best Linear Unbiased Predictors (BLUPs) from fitted MVMeta model
-    
-    This function replicates R's blup() function behavior, returning location-specific
-    coefficients that shrink individual estimates toward the meta-regression prediction.
-    
-    Parameters:
-    -----------
-    mv_model : MVMeta
-        Fitted multivariate meta-analysis model
-    vcov : bool, default True
-        Whether to return variance-covariance matrices for BLUPs
-        
-    Returns:
-    --------
-    List[Dict]
-        List of dictionaries, one per study/location, each containing:
-        - 'blup': BLUP coefficients for this location
-        - 'vcov': Variance-covariance matrix (if vcov=True)
+    BLUPs from a fitted MVMeta model.
+
+    Matches R's blup.mvmeta:
+      blup_i = pred_i + Psi @ (S_i + Psi)^{-1} @ (y_i - pred_i)
+      V_i    = X_i @ vcov(beta) @ X_i.T + Psi - Psi @ (S_i + Psi)^{-1} @ Psi
     """
-    if not mv_model.converged:
-        raise ValueError("MVMeta model has not converged")
-    
-    n_studies = mv_model.n_studies
-    n_outcomes = mv_model.n_outcomes
-    
-    # Get meta-regression predictions for each study
-    study_predictions = mv_model.X @ mv_model.coefficients  # Shape: (n_studies, n_outcomes)
-    
-    blup_results = []
-    
-    for i in range(n_studies):
-        # Individual study estimate
-        y_i = mv_model.y[i]  # Shape: (n_outcomes,)
-        S_i = mv_model.S[i]  # Shape: (n_outcomes, n_outcomes)
-        
-        # Meta-regression prediction for this study
-        pred_i = study_predictions[i]  # Shape: (n_outcomes,)
-        
-        # Calculate BLUP using shrinkage formula:
-        # BLUP_i = (S_i^-1 + Psi^-1)^-1 * (S_i^-1 * y_i + Psi^-1 * pred_i)
-        # where Psi is the between-study covariance matrix
-        
+    if not mv_model.converged and mv_model.psi is None:
+        raise ValueError("MVMeta model has not been fitted")
+
+    Psi = mv_model.psi
+    k   = mv_model.k
+    results = []
+
+    for i in range(mv_model.n):
+        y_i    = mv_model.y[i]
+        S_i    = mv_model.S[i]
+        X_i    = mv_model._Xlist[i]   # (k, p*k)
+
+        # Meta-regression prediction for study i
+        pred_i = X_i @ mv_model.coefficients.T.ravel()   # (k,)
+
+        Sigma_i = S_i + Psi
         try:
-            S_i_inv = linalg.inv(S_i)
-            psi_inv = linalg.inv(mv_model.psi)
-            
-            # Combined precision matrix
-            precision = S_i_inv + psi_inv
-            precision_inv = linalg.inv(precision)
-            
-            # BLUP estimate (shrinkage toward meta-regression prediction)
-            blup_coef = precision_inv @ (S_i_inv @ y_i + psi_inv @ pred_i)
-            
-            result_dict = {'blup': blup_coef}
-            
-            if vcov:
-                # BLUP variance-covariance matrix
-                result_dict['vcov'] = precision_inv
-                
-        except linalg.LinAlgError:
-            # Fallback: use meta-regression prediction if matrices are singular
-            warnings.warn(f"Singular matrices for study {i}, using meta-regression prediction")
-            result_dict = {'blup': pred_i}
-            if vcov:
-                result_dict['vcov'] = mv_model.psi.copy()
-        
-        blup_results.append(result_dict)
-    
-    return blup_results
+            Sigma_inv_i = np.linalg.inv(Sigma_i)
+        except np.linalg.LinAlgError:
+            Sigma_inv_i = np.linalg.pinv(Sigma_i)
+
+        # BLUP (shrinkage toward prediction)
+        blup_coef = pred_i + Psi @ Sigma_inv_i @ (y_i - pred_i)
+
+        result = {'blup': blup_coef}
+
+        if vcov:
+            # Uncertainty from fixed effects estimation
+            var_fixed = X_i @ mv_model._vcov_beta @ X_i.T
+            # Residual uncertainty after shrinkage
+            var_random = Psi - Psi @ Sigma_inv_i @ Psi
+            result['vcov'] = var_fixed + var_random
+
+        results.append(result)
+
+    return results
 
 
-def mvmeta(y: np.ndarray, S: np.ndarray, X: Optional[np.ndarray] = None, 
-          method: str = "reml", control: Optional[Dict] = None) -> MVMeta:
-    """
-    Convenience function for multivariate meta-analysis
-    
-    Parameters:
-    -----------
-    y : array-like
-        Effect estimates from each study
-    S : array-like  
-        Within-study variance-covariance matrices
-    X : array-like, optional
-        Study-level covariates
-    method : str, default "reml"
-        Estimation method
-    control : dict, optional
-        Control parameters
-        
-    Returns:
-    --------
-    MVMeta
-        Fitted meta-analysis model
-    """
+def mvmeta(y: np.ndarray, S: np.ndarray, X: Optional[np.ndarray] = None,
+           method: str = "reml", control: Optional[Dict] = None) -> MVMeta:
+    """Convenience wrapper: create and fit MVMeta."""
     model = MVMeta(method=method, control=control)
     return model.fit(y, S, X)

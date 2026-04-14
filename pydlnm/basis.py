@@ -314,7 +314,13 @@ class CrossBasis:
         
         # Create OneBasis for exposure dimension
         self.basisvar = OneBasis(x_var, **self.argvar)
-        
+
+        # Store training boundary knots so prediction at out-of-range temperatures
+        # uses the same boundary knots as training, matching R's crossbasis/mkXpred.
+        if self.argvar.get('fun') == 'bs' and 'Boundary_knots' not in self.argvar:
+            x_clean = x_var[~np.isnan(x_var)]
+            self.argvar['Boundary_knots'] = np.array([x_clean.min(), x_clean.max()])
+
         # Create lag basis
         lag_seq = seqlag(self.lag)
         self.basislag = OneBasis(lag_seq, **self.arglag)
@@ -367,14 +373,20 @@ class CrossBasis:
         with localconverter(robjects.default_converter + numpy2ri.converter):
             robjects.globalenv['temp_data'] = exposure_values
             
+            # Store boundary knots from training data if not already set
+            if 'Boundary_knots' not in self.argvar:
+                x_clean = exposure_values[~np.isnan(exposure_values)]
+                self.argvar['Boundary_knots'] = np.array([x_clean.min(), x_clean.max()])
+            robjects.globalenv['bk_vals'] = self.argvar['Boundary_knots']
+
             if 'knots' in self.argvar:
                 robjects.globalenv['var_knots'] = self.argvar['knots']
                 degree = self.argvar.get('degree', 3)
-                robjects.r(f'var_basis <- bs(temp_data, knots=var_knots, degree={degree})')
+                robjects.r(f'var_basis <- bs(temp_data, knots=var_knots, degree={degree}, Boundary.knots=bk_vals)')
             else:
                 df = self.argvar.get('df', 3)
                 degree = self.argvar.get('degree', 3)
-                robjects.r(f'var_basis <- bs(temp_data, df={df}, degree={degree})')
+                robjects.r(f'var_basis <- bs(temp_data, df={df}, degree={degree}, Boundary.knots=bk_vals)')
             
             r_var_basis = np.array(robjects.r('var_basis'))
         
@@ -394,35 +406,25 @@ class CrossBasis:
             
             r_lag_basis = np.array(robjects.r('lag_basis'))
         
-        # Create crossbasis using exact R methodology
-        for i in range(n_obs):
-            # Only compute if we have sufficient lag history (matching R exactly)
-            if i >= max_lag:
-                # For each variable basis function
-                for v in range(n_var_basis):
-                    # For each lag basis function  
-                    for l in range(n_lag_basis):
-                        col_idx = v * n_lag_basis + l
-                        
-                        # Sum over all lag times
-                        value = 0.0
-                        for lag_time_idx, lag_time in enumerate(lag_seq):
-                            # Index of lagged exposure
-                            lag_idx = i - int(lag_time)
-                            
-                            if lag_idx >= 0:
-                                # Variable basis at lagged exposure
-                                var_value = r_var_basis[lag_idx, v]
-                                
-                                # Lag basis weight for this lag time
-                                lag_value = r_lag_basis[lag_time_idx, l]
-                                
-                                # Add to sum if both values are valid
-                                if not (np.isnan(var_value) or np.isnan(lag_value)):
-                                    value += var_value * lag_value
-                        
-                        self.basis[i, col_idx] = value
-        
+        # Build the cross-basis using vectorized matrix multiplications.
+        # For each variable basis column v:
+        #   1. Build a lagged matrix L where L[i, t] = r_var_basis[i-t, v]
+        #   2. CB[:, v*n_lag_basis:(v+1)*n_lag_basis] = L @ r_lag_basis
+        # This replaces the O(n_obs * n_var * n_lag_basis * n_lags) Python loop
+        # with n_var numpy matmuls.
+        n_lags = len(lag_seq)
+        for v in range(n_var_basis):
+            lag_matrix = np.full((n_obs, n_lags), np.nan)
+            for t_idx, lag_time in enumerate(lag_seq):
+                t_int = int(lag_time)
+                if t_int == 0:
+                    lag_matrix[:, t_idx] = r_var_basis[:, v]
+                elif t_int > 0:
+                    lag_matrix[t_int:, t_idx] = r_var_basis[:-t_int, v]
+            # (n_obs, n_lags) @ (n_lags, n_lag_basis) → (n_obs, n_lag_basis)
+            # NaN rows propagate automatically through np.dot when any lag is NaN
+            self.basis[:, v * n_lag_basis:(v + 1) * n_lag_basis] = lag_matrix @ r_lag_basis
+
         # R dlnm behavior: Set entire first max_lag rows to NaN
         # This is because for observations 0 to max_lag-1, we don't have complete
         # exposure history to compute the distributed lag effect

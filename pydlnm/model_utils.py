@@ -35,6 +35,26 @@ def getcoef(model: Any, model_class: Optional[str] = None) -> np.ndarray:
     if model_class is None:
         model_class = type(model).__name__
     
+    # Handle PyDLNM's rpy2-based GLM interfaces
+    if model_class == 'DLNMGLMInterface':
+        coef, _ = model.get_crossbasis_coefficients()
+        if coef is not None:
+            return np.asarray(coef)
+        else:
+            raise AttributeError("No coefficients available from DLNMGLMInterface")
+    
+    if model_class == 'Rpy2GLMInterface':
+        if hasattr(model, 'cb_coef') and model.cb_coef is not None:
+            return np.asarray(model.cb_coef)
+        else:
+            raise AttributeError("No cross-basis coefficients available from Rpy2GLMInterface")
+
+    if model_class == 'ImprovedGLMInterface':
+        if hasattr(model, 'cb_coef') and model.cb_coef is not None:
+            return np.asarray(model.cb_coef)
+        else:
+            raise AttributeError("No cross-basis coefficients available from ImprovedGLMInterface")
+
     # Try common coefficient attributes
     coef_attrs = ['params', 'coef_', 'coefficients', 'coef', 'beta']
     
@@ -86,6 +106,26 @@ def getvcov(model: Any, model_class: Optional[str] = None) -> np.ndarray:
     if model_class is None:
         model_class = type(model).__name__
     
+    # Handle PyDLNM's rpy2-based GLM interfaces
+    if model_class == 'DLNMGLMInterface':
+        _, vcov = model.get_crossbasis_coefficients()
+        if vcov is not None:
+            return np.asarray(vcov)
+        else:
+            raise AttributeError("No variance-covariance matrix available from DLNMGLMInterface")
+    
+    if model_class == 'Rpy2GLMInterface':
+        if hasattr(model, 'cb_vcov') and model.cb_vcov is not None:
+            return np.asarray(model.cb_vcov)
+        else:
+            raise AttributeError("No cross-basis vcov matrix available from Rpy2GLMInterface")
+
+    if model_class == 'ImprovedGLMInterface':
+        if hasattr(model, 'cb_vcov') and model.cb_vcov is not None:
+            return np.asarray(model.cb_vcov)
+        else:
+            raise AttributeError("No cross-basis vcov matrix available from ImprovedGLMInterface")
+
     # Try common vcov attributes and methods
     vcov_attrs = ['cov_params', 'vcov', 'cov_', 'covariance_matrix']
     vcov_methods = ['cov_params', 'vcov']
@@ -160,6 +200,19 @@ def getlink(model: Any,
     # Determine model class if not provided
     if model_class is None:
         model_class = type(model).__name__
+    
+    # Handle PyDLNM's rpy2-based GLM interfaces
+    if model_class == 'DLNMGLMInterface':
+        # For quasi-Poisson family, the link is log
+        return 'log'
+
+    if model_class == 'Rpy2GLMInterface':
+        # For quasi-Poisson family, the link is log
+        return 'log'
+
+    if model_class == 'ImprovedGLMInterface':
+        # For quasi-Poisson family, the link is log
+        return 'log'
     
     # Try to extract from family attribute (common in GLMs)
     if hasattr(model, 'family'):

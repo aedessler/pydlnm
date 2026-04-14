@@ -7,7 +7,7 @@ for modeling exposure-lag-response associations in epidemiological studies.
 This package provides a comprehensive framework for:
 - Creating basis functions for exposure-response and lag-response relationships
 - Constructing cross-basis matrices using tensor products
-- Fitting models with various regression frameworks
+- Fitting models with R's GLM via rpy2 for exact compatibility
 - Making predictions and visualizing results
 - Handling time series and non-time series study designs
 
@@ -17,9 +17,26 @@ Main classes:
 - CrossPred: Prediction results and inference
 
 Based on the R dlnm package by Antonio Gasparrini.
+
+REQUIREMENTS:
+- rpy2 package for R integration (GLM and splines functionality)
 """
 
-__version__ = "0.1.0"
+# Check for rpy2 availability at import time
+import warnings
+try:
+    import rpy2
+    HAS_RPY2 = True
+except ImportError:
+    HAS_RPY2 = False
+    warnings.warn(
+        "rpy2 is not available. PyDLNM requires rpy2 for GLM and splines functionality. "
+        "Please install rpy2 with: pip install rpy2",
+        ImportWarning,
+        stacklevel=2
+    )
+
+__version__ = "0.6.0"
 __author__ = "Python DLNM Contributors"
 
 # Core classes
@@ -29,7 +46,7 @@ from .meta_analysis import MVMeta, mvmeta, blup
 from .centering import find_mmt, recenter_basis, CenteringManager
 from .attribution import attrdl, attr_heat_cold, AttributionManager
 
-# GLM integration and model fitting
+# GLM integration and model fitting (rpy2-based only)
 from .glm_integration import DLNMGLMInterface, fit_dlnm_model
 from .improved_glm import ImprovedGLMInterface, fit_enhanced_dlnm_model
 from .rpy2_glm import Rpy2GLMInterface

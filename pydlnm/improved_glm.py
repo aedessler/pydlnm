@@ -10,12 +10,11 @@ import numpy as np
 import pandas as pd
 from typing import Union, Optional, Dict, Any, Tuple
 import warnings
-from scipy import sparse
-from sklearn.preprocessing import LabelEncoder
 
 # Set R environment before importing rpy2
 os.environ['R_HOME'] = '/Library/Frameworks/R.framework/Resources'
 
+# R integration via rpy2 - REQUIRED
 try:
     import rpy2
     import rpy2.robjects as ro
@@ -47,7 +46,10 @@ class ImprovedGLMInterface:
     
     def __init__(self, crossbasis: CrossBasis):
         if not HAS_RPY2:
-            raise ImportError("rpy2 is required for R GLM integration. Install with: pip install rpy2")
+            raise ImportError(
+                "rpy2 is required for GLM functionality in PyDLNM. "
+                "Please install rpy2 with: pip install rpy2"
+            )
         
         self.crossbasis = crossbasis
         self.r_model = None
@@ -242,8 +244,9 @@ class ImprovedGLMInterface:
             X_clean = X_full
             y_clean = y
         
-        # Create column names matching R conventions
-        cb_names = [f'cb.v{(i//5)+1}.l{(i%5)+1}' for i in range(cb_matrix.shape[1])]
+        # Create column names matching R conventions, using actual n_lag_basis
+        n_lag_basis = self.crossbasis.df[1]
+        cb_names = [f'cb.v{(i//n_lag_basis)+1}.l{(i%n_lag_basis)+1}' for i in range(cb_matrix.shape[1])]
         
         # Day-of-week names (R uses full day names, drop Monday as reference)
         dow_names = ['dowTuesday', 'dowWednesday', 'dowThursday', 'dowFriday', 'dowSaturday', 'dowSunday']

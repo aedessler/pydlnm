@@ -393,33 +393,32 @@ class CrossPred:
             # Standard approach for full cross-basis coefficients
             # Use integer lags for overall predictions
             predlag_int = seqlag(self.lag)
-            
+
             # Create prediction matrix for integer lags
+            # Xpred shape: (n_var * n_lag, n_basis), rows ordered VAR-outer, LAG-inner
+            # i.e. row = var_idx * n_lag + lag_idx
             self._create_prediction_matrix(self.predvar, predlag_int)
-            
-            # Compute overall effects by summing across lags
-            Xpred_all = np.zeros((len(self.predvar), self.coefficients.shape[0]))
-            
+
+            n_var_pred = len(self.predvar)
+            n_lag_pred = len(predlag_int)
+            n_basis = self.coefficients.shape[0]
+
+            # Reshape to (n_var, n_lag, n_basis) so we can sum/accumulate over the lag axis
+            Xpred_3d = self.Xpred.reshape(n_var_pred, n_lag_pred, n_basis)
+
             if self.cumul:
-                # Initialize cumulative arrays
-                self.cumfit = np.zeros((len(self.predvar), len(predlag_int)))
-                self.cumse = np.zeros((len(self.predvar), len(predlag_int)))
-            
-            # Sum across lags
-            for i, lag_val in enumerate(predlag_int):
-                # Get indices for this lag
-                lag_indices = slice(i * len(self.predvar), (i + 1) * len(self.predvar))
-                Xpred_lag = self.Xpred[lag_indices, :]
-                
-                Xpred_all += Xpred_lag
-                
-                if self.cumul:
-                    # Cumulative effects up to this lag
-                    self.cumfit[:, i] = Xpred_all @ self.coefficients
-                    cumvar = np.sum((Xpred_all @ self.vcov) * Xpred_all, axis=1)
+                # Cumulative sum over lags: shape (n_var, n_lag, n_basis)
+                Xpred_cum = np.cumsum(Xpred_3d, axis=1)
+                self.cumfit = np.zeros((n_var_pred, n_lag_pred))
+                self.cumse = np.zeros((n_var_pred, n_lag_pred))
+                for i in range(n_lag_pred):
+                    Xc = Xpred_cum[:, i, :]  # (n_var, n_basis)
+                    self.cumfit[:, i] = Xc @ self.coefficients
+                    cumvar = np.sum((Xc @ self.vcov) * Xc, axis=1)
                     self.cumse[:, i] = np.sqrt(np.maximum(0, cumvar))
-            
-            # Overall effects
+
+            # Overall: sum over all lags for each variable value
+            Xpred_all = Xpred_3d.sum(axis=1)  # (n_var, n_basis)
             self.allfit = Xpred_all @ self.coefficients
             allvar = np.sum((Xpred_all @ self.vcov) * Xpred_all, axis=1)
             self.allse = np.sqrt(np.maximum(0, allvar))
@@ -557,29 +556,8 @@ def crosspred(basis: Union[OneBasis, CrossBasis],
     >>> print(pred.summary())
     """
     
-    # Extract model coefficients and variance-covariance matrix
-    if hasattr(model, 'params') and hasattr(model, 'cov_params'):
-        # statsmodels GLM
-        coef = model.params
-        vcov = model.cov_params()
-        # Handle model.model.family or direct family attribute
-        if hasattr(model, 'model') and hasattr(model.model, 'family'):
-            model_link = getattr(model.model.family, 'link', None)
-        elif hasattr(model, 'family'):
-            model_link = getattr(model.family, 'link', None)
-        else:
-            model_link = None
-        if model_link:
-            model_link = model_link.__class__.__name__.lower()
-    elif hasattr(model, 'coef_') and hasattr(model, 'predict'):
-        # sklearn model
-        coef = getattr(model, 'coef_', None)
-        vcov = None  # sklearn doesn't provide covariance matrix
-        model_link = 'identity'
-    elif coef is not None and vcov is not None:
-        # Direct coefficient specification
-        pass  # coef and vcov already set from function parameters
-    else:
+    # Validate parameters - either model or both coef and vcov must be provided
+    if model is None and (coef is None or vcov is None):
         raise ValueError("Either 'model' or both 'coef' and 'vcov' must be provided.")
     
     # Create CrossPred object

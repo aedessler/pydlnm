@@ -139,10 +139,11 @@ class Rpy2GLMInterface:
         
         # Create R data frame
         data_dict = {'death': y_clean}
-        
-        # Add cross-basis columns
+
+        # Add cross-basis columns using actual n_lag_basis from the cross-basis object
+        n_lag_basis = self.crossbasis.df[1]
         for i in range(cb_clean.shape[1]):
-            data_dict[f'cb.v{(i//5)+1}.l{(i%5)+1}'] = cb_clean[:, i]
+            data_dict[f'cb.v{(i//n_lag_basis)+1}.l{(i%n_lag_basis)+1}'] = cb_clean[:, i]
         
         # Add other variables
         if other_clean is not None:
@@ -163,7 +164,7 @@ class Rpy2GLMInterface:
         ro.globalenv['model_data'] = r_df
         
         # Build formula
-        cb_terms = [f'cb.v{(i//5)+1}.l{(i%5)+1}' for i in range(cb_clean.shape[1])]
+        cb_terms = [f'cb.v{(i//n_lag_basis)+1}.l{(i%n_lag_basis)+1}' for i in range(cb_clean.shape[1])]
         cb_formula = ' + '.join(cb_terms)
         
         other_terms = []
