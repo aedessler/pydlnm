@@ -40,23 +40,23 @@ __version__ = "0.6.0"
 __author__ = "Python DLNM Contributors"
 
 # Core classes
-from .basis import OneBasis, CrossBasis
-from .prediction import CrossPred, crosspred
-from .meta_analysis import MVMeta, mvmeta, blup
-from .centering import find_mmt, recenter_basis, CenteringManager
-from .attribution import attrdl, attr_heat_cold, AttributionManager
+from basis import OneBasis, CrossBasis
+from prediction import CrossPred, crosspred
+from meta_analysis import MVMeta, mvmeta, blup
+from centering import find_mmt, recenter_basis, CenteringManager
+from attribution import attrdl, attr_heat_cold, AttributionManager
 
 # GLM integration and model fitting (rpy2-based only)
-from .glm_integration import DLNMGLMInterface, fit_dlnm_model
-from .improved_glm import ImprovedGLMInterface, fit_enhanced_dlnm_model
-from .rpy2_glm import Rpy2GLMInterface
-from .crossreduce import CrossReduce, crossreduce, coef, vcov
+from glm_integration import DLNMGLMInterface, fit_dlnm_model
+from improved_glm import ImprovedGLMInterface, fit_enhanced_dlnm_model
+from rpy2_glm import Rpy2GLMInterface
+from crossreduce import CrossReduce, crossreduce, coef, vcov
 
 # Utility functions
-from .utils import mklag, seqlag, exphist
+from utils import mklag, seqlag, exphist
 
 # Basis function implementations
-from .basis_functions import (
+from basis_functions import (
     LinearBasis,
     PolynomialBasis,
     SplineBasis,
@@ -66,7 +66,7 @@ from .basis_functions import (
 )
 
 # Enhanced spline implementations
-from .enhanced_splines import (
+from enhanced_splines import (
     EnhancedBSplineBasis,
     EnhancedNaturalSplineBasis,
     bs_enhanced,
@@ -74,7 +74,7 @@ from .enhanced_splines import (
 )
 
 # Seasonality modeling
-from .seasonality import (
+from seasonality import (
     HarmonicSeasonalBasis,
     SeasonalSplineBasis,
     FlexibleSeasonalBasis,
@@ -83,20 +83,20 @@ from .seasonality import (
 )
 
 # Penalized DLNM framework
-from .penalized import (
+from penalized import (
     PenalizedCrossBasis,
     PenalizedDLNM,
     penalized_dlnm,
 )
 
 # Multi-location analysis
-from .multi_location import (
+from multi_location import (
     MultiLocationDLNM,
     multi_location_dlnm_analysis,
 )
 
 # Data
-from . import data
+from  import data
 
 __all__ = [
     "OneBasis",

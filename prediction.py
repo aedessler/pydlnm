@@ -10,9 +10,9 @@ from scipy import stats
 from typing import Union, Optional, List, Dict, Any, Tuple
 import warnings
 
-from .basis import OneBasis, CrossBasis
-from .model_utils import validate_model_compatibility
-from .utils import mklag, seqlag
+from basis import OneBasis, CrossBasis
+from model_utils import validate_model_compatibility
+from utils import mklag, seqlag
 
 
 class CrossPred:
@@ -163,7 +163,7 @@ class CrossPred:
                 temp_predvar, temp_cen = self._setup_predictions(at, from_val, to_val, by, cen)
                 
                 # Create variable basis for predictions
-                from .basis import OneBasis
+                from basis import OneBasis
                 self.variable_basis = OneBasis(temp_predvar, **basis.argvar)
                 
                 if self.variable_basis.shape[1] != coef_len:
@@ -291,7 +291,7 @@ class CrossPred:
         
         # Apply centering if specified
         if self.cen is not None:
-            from .basis import OneBasis
+            from basis import OneBasis
             cen_basis = OneBasis([self.cen], **self.original_basis.argvar)
             basis_matrix = basis_matrix - cen_basis.basis
         
@@ -370,7 +370,7 @@ class CrossPred:
             
             # Apply centering if specified
             if self.cen is not None:
-                from .basis import OneBasis
+                from basis import OneBasis
                 cen_basis = OneBasis([self.cen], **self.original_basis.argvar)
                 var_basis = var_basis - cen_basis.basis
             

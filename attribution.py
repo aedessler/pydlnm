@@ -12,9 +12,9 @@ from scipy import stats
 from typing import Optional, Union, List, Dict, Tuple, Any
 import warnings
 
-from .basis import CrossBasis
-from .prediction import CrossPred
-from .centering import find_mmt, find_mmt_blup
+from basis import CrossBasis
+from prediction import CrossPred
+from centering import find_mmt, find_mmt_blup
 
 
 def attrdl_proper(x: np.ndarray,
@@ -325,7 +325,7 @@ def _simulate_attribution_ci(x: np.ndarray,
     
     # Get model coefficients and covariance
     if model is not None:
-        from .model_utils import validate_model_compatibility
+        from model_utils import validate_model_compatibility
         model_info = validate_model_compatibility(model, basis.shape[1], "CrossBasis")
         coef_vec = model_info['coef']
         vcov_mat = model_info['vcov']

@@ -25,8 +25,8 @@ try:
 except ImportError:
     HAS_RPY2 = False
 
-from .basis import CrossBasis
-from .basis_functions import SplineBasis
+from basis import CrossBasis
+from basis_functions import SplineBasis
 
 
 class ImprovedGLMInterface:
@@ -358,7 +358,7 @@ class ImprovedGLMInterface:
             raise ValueError("No model fitted yet")
         
         # Always use Python crossreduce for better compatibility
-        from .crossreduce import crossreduce
+        from crossreduce import crossreduce
         return crossreduce(
             basis=self.crossbasis, 
             coef=self.cb_coef, 

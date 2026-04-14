@@ -12,8 +12,8 @@ from scipy.sparse import csc_matrix, identity, kron
 from typing import Optional, Union, Dict, Tuple, Any, List
 import warnings
 
-from .basis import CrossBasis, OneBasis
-from .enhanced_splines import bs_enhanced, ns_enhanced
+from basis import CrossBasis, OneBasis
+from enhanced_splines import bs_enhanced, ns_enhanced
 
 
 class PenalizedCrossBasis(CrossBasis):

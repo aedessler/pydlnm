@@ -24,7 +24,7 @@ try:
 except ImportError:
     HAS_RPY2 = False
 
-from .basis import CrossBasis
+from basis import CrossBasis
 
 
 class Rpy2GLMInterface:
@@ -254,7 +254,7 @@ class Rpy2GLMInterface:
         
         if not self.has_dlnm:
             # Fallback to Python crossreduce
-            from .crossreduce import crossreduce
+            from crossreduce import crossreduce
             return crossreduce(self.crossbasis, self.cb_coef, self.cb_vcov, cen=cen)
         
         # Use R's crossreduce with dlnm package

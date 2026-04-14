@@ -10,8 +10,8 @@ from scipy import optimize
 from typing import Optional, Tuple, Union, Dict, Any, List
 import warnings
 
-from .basis import CrossBasis
-from .prediction import CrossPred
+from basis import CrossBasis
+from prediction import CrossPred
 
 
 def find_mmt_blup(x: np.ndarray,
@@ -46,7 +46,7 @@ def find_mmt_blup(x: np.ndarray,
     dict
         Dictionary containing MMT results
     """
-    from .basis_functions import BSplineBasis
+    from basis_functions import BSplineBasis
     
     # Create prediction range (1st to 99th percentiles like R)
     predvar = np.percentile(x[~np.isnan(x)], 

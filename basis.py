@@ -9,12 +9,12 @@ import numpy as np
 from typing import Union, Optional, Dict, Any, Callable, List, Tuple
 import warnings
 
-from .basis_functions import (
+from basis_functions import (
     LinearBasis, PolynomialBasis, SplineBasis, BSplineBasis, 
     StrataBasis, ThresholdBasis, BaseBasisFunction
 )
-from .utils import mklag, seqlag
-from .model_utils import validate_model_compatibility
+from utils import mklag, seqlag
+from model_utils import validate_model_compatibility
 
 
 class OneBasis:
@@ -269,7 +269,7 @@ class CrossBasis:
             lag_seq = seqlag(self.lag)
             if len(lag_seq) > 1:
                 # Use proper logknots function matching R exactly
-                from .utils import logknots
+                from utils import logknots
                 lag_range = [int(min(lag_seq)), int(max(lag_seq))]
                 # Default to 3 knots if lag range > 1 
                 if np.diff(lag_range)[0] > 1:

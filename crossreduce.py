@@ -9,8 +9,8 @@ import numpy as np
 from typing import Union, Optional, Dict, Any, Tuple
 import warnings
 
-from .basis import CrossBasis, OneBasis
-from .glm_integration import DLNMGLMInterface
+from basis import CrossBasis, OneBasis
+from glm_integration import DLNMGLMInterface
 
 
 class CrossReduce:
@@ -200,7 +200,7 @@ def _reduce_overall_exact(crossbasis: CrossBasis,
     
     # Create lag sequence exactly as R does: seqlag(lag)
     lag_range = crossbasis.lag
-    from .utils import seqlag
+    from utils import seqlag
     lag_sequence = seqlag(lag_range)
     
     # Build lag basis using the same arguments as the original cross-basis

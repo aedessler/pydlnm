@@ -10,7 +10,7 @@ import pandas as pd
 from typing import Union, Optional, Dict, Any, Tuple, List
 import warnings
 
-from .basis import CrossBasis
+from basis import CrossBasis
 
 
 class DLNMGLMInterface:
@@ -35,7 +35,7 @@ class DLNMGLMInterface:
     def _check_rpy2(self):
         """Check if rpy2 is available and initialize interface"""
         try:
-            from .rpy2_glm import Rpy2GLMInterface
+            from rpy2_glm import Rpy2GLMInterface
             self.rpy2_interface = Rpy2GLMInterface(self.crossbasis)
         except ImportError:
             raise ImportError(

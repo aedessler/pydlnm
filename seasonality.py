@@ -12,8 +12,8 @@ from typing import Optional, Union, List, Tuple, Dict, Any
 from datetime import datetime, date
 import warnings
 
-from .basis_functions import SplineBasis, BSplineBasis
-from .enhanced_splines import ns_enhanced
+from basis_functions import SplineBasis, BSplineBasis
+from enhanced_splines import ns_enhanced
 
 
 class SeasonalBasis:
@@ -187,7 +187,7 @@ class SeasonalSplineBasis(SeasonalBasis):
             )
         elif self.spline_type == 'bs':
             # B-spline
-            from .enhanced_splines import bs_enhanced
+            from enhanced_splines import bs_enhanced
             basis_matrix, spline_attrs = bs_enhanced(
                 seasonal_position,
                 df=self.df,

@@ -10,10 +10,10 @@ import pandas as pd
 from typing import List, Dict, Any, Optional, Tuple
 import warnings
 
-from .improved_glm import fit_enhanced_dlnm_model
-from .meta_analysis import mvmeta, blup
-from .basis import CrossBasis
-from .centering import find_mmt_blup
+from improved_glm import fit_enhanced_dlnm_model
+from meta_analysis import mvmeta, blup
+from basis import CrossBasis
+from centering import find_mmt_blup
 
 
 class MultiLocationDLNM:
