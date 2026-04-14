@@ -2,11 +2,13 @@
 
 PyDLNM is a Python implementation of distributed lag linear and non-linear models (DLMs/DLNMs) for modeling exposure-lag-response associations in epidemiological studies.
 
-**Version 0.7** — Fully validated against R DLNM (machine precision match across all stages).
+**Version 0.8** — Validated against R DLNM at machine precision across two independent datasets.
 
 ## Validation Status
 
-Validated against the 2015 Gasparrini *Lancet* dataset (10 England & Wales regions, `test_against_r.py`):
+### England & Wales (10 regions, Gasparrini *Lancet* 2015)
+
+Validated via `test_against_r.py`:
 
 | Stage | Description | Result |
 |-------|-------------|--------|
@@ -16,9 +18,23 @@ Validated against the 2015 Gasparrini *Lancet* dataset (10 England & Wales regio
 
 ![PyDLNM vs R DLNM Validation Results](rr_comparison_R_vs_Python.png)
 
-*Temperature–mortality relative risk curves across all 10 England & Wales regions.
-Blue = R reference, red dashed = Python prediction using R's BLUPs, green dotted = full Python pipeline.
-All three are visually and numerically identical.*
+*Temperature–mortality RR curves for 10 England & Wales regions. Blue = R reference, red dashed = Python prediction using R's BLUPs, green dotted = full Python pipeline. All three are numerically identical.*
+
+### 106 US Cities
+
+The full pipeline (first-stage GLMs → MVMeta → BLUP → RR curves) was run independently in both PyDLNM and R (`dlnm` + `mvmeta`) on a dataset of 106 US cities (1987–2000). Results were compared city by city:
+
+| Metric | Result |
+|--------|--------|
+| Cities passing (max\|ΔRR\| < 0.05) | 106 / 106 |
+| Median max\|ΔRR\| | 0.0000 |
+| Mean max\|ΔRR\| | 0.0011 |
+| Correlation (R vs Python) | 1.00000 for all 106 cities |
+| MMT agreement | Exact for 84 cities; ≤ 0.1 °C for all others |
+
+Tiny residuals in 22 cities reflect a 0.1 °C grid-step difference in MMT detection between R's `seq()` and NumPy's `arange()` — both pipelines produce the same RR curve; only the centering point differs by one grid step.
+
+> **R `crosspred` pitfall discovered during validation:** Calling `crosspred(crossbasis, model, coef=blup, vcov=blup_vcov)` in R silently ignores the user-supplied `coef`/`vcov` whenever a `model` is also passed — R extracts the model's own GLM estimates instead. The correct R usage for BLUP-based prediction is `crosspred(onebasis, coef=blup, vcov=blup_vcov)` (no model), as in Gasparrini's own `05.plots.R`. PyDLNM's reduced-coefficient path implements this correctly and matches R at machine precision.
 
 ## Implementation Strategy
 
@@ -49,13 +65,10 @@ PyDLNM uses R's statistical functions via `rpy2` for components where exact nume
 ```bash
 git clone https://github.com/aedessler/pydlnm
 cd pydlnm
-pip install -e ".[dev]"
-
-# R integration is required for GLM fitting and spline functions
 pip install rpy2
 ```
 
-Requires R with the `dlnm` and `splines` packages installed. Set `R_HOME` before importing if needed:
+Requires R with the `dlnm`, `mvmeta`, and `splines` packages installed. Set `R_HOME` before importing if needed:
 
 ```python
 import os
@@ -72,10 +85,10 @@ os.environ['R_HOME'] = '/Library/Frameworks/R.framework/Resources'
 
 import numpy as np
 import pandas as pd
-from pydlnm.basis import CrossBasis
-from pydlnm.improved_glm import ImprovedGLMInterface
-from pydlnm.prediction import crosspred
-from pydlnm.utils import logknots
+from basis import CrossBasis
+from improved_glm import ImprovedGLMInterface
+from prediction import crosspred
+from utils import logknots
 
 # Load your data
 df = pd.read_csv('your_data.csv')
@@ -112,8 +125,7 @@ print(f"RR range: {pred.allRRfit.min():.3f} to {pred.allRRfit.max():.3f}")
 ### Multi-Location Analysis with MVMeta
 
 ```python
-from pydlnm.crossreduce import crossreduce
-from pydlnm.meta_analysis import MVMeta, blup
+from meta_analysis import MVMeta, blup
 
 # --- First stage: fit one model per location ---
 coef_list, vcov_list = [], []
@@ -146,26 +158,23 @@ for i, location in enumerate(locations):
                      at=pred_temps, cen=mmt_i)
 ```
 
-> **Note**: PyDLNM's `MVMeta` does not auto-add an intercept. Always include a column of ones in `X` when using meta-regression covariates, matching R's default formula behaviour (`~ x1 + x2` includes an intercept).
+> **Note**: PyDLNM's `MVMeta` does not auto-add an intercept. Always include a column of ones in `X` when using meta-regression covariates, matching R's default formula behaviour (`~ x1 + x2` includes an intercept automatically).
 
 ## Project Structure
 
 ```
-PyDLNM/
-├── pydlnm/
-│   ├── basis.py              # CrossBasis construction (vectorized)
-│   ├── basis_functions.py    # OneBasis: bs, ns, poly, threshold, strata
-│   ├── crossreduce.py        # CrossReduce: collapse to overall effects
-│   ├── prediction.py         # CrossPred: lag-specific & cumulative RR
-│   ├── improved_glm.py       # GLM fitting via R (quasi-Poisson + seasonality)
-│   ├── meta_analysis.py      # MVMeta (REML) + BLUP
-│   ├── model_utils.py        # getcoef / getvcov / getlink helpers
-│   └── utils.py              # logknots and other utilities
-├── validation/
-│   ├── results/              # Reference RDS files, CSVs, and comparison plots
-│   └── scripts/              # Scripts for reproducing validation
-├── test_against_r.py         # End-to-end 3-stage validation script
-└── plot_rr_comparison.py     # RR curve comparison plot generator
+pydlnm/
+├── basis.py              # CrossBasis construction (vectorized)
+├── basis_functions.py    # OneBasis: bs, ns, poly, threshold, strata
+├── crossreduce.py        # CrossReduce: collapse to overall effects
+├── prediction.py         # CrossPred: lag-specific & cumulative RR
+├── improved_glm.py       # GLM fitting via R (quasi-Poisson + seasonality)
+├── meta_analysis.py      # MVMeta (REML) + BLUP
+├── model_utils.py        # getcoef / getvcov / getlink helpers
+├── utils.py              # logknots and other utilities
+├── test_against_r.py     # End-to-end 3-stage validation (England & Wales)
+├── plot_rr_comparison.py # RR curve comparison plot generator
+└── generate_r_reference.R  # Regenerates England & Wales reference data
 ```
 
 ## Based on R dlnm Package
