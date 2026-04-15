@@ -16,7 +16,7 @@ Validated via `test_against_r.py`:
 | 2 | Prediction with R's BLUPs | Exact match (max\|ΔRR\| = 0.000000, corr = 1.0000000) |
 | 3 | Full pipeline (MVMeta → BLUP → RR curves) | Exact match (max\|ΔRR\| = 0.0000, corr = 1.000000) |
 
-![PyDLNM vs R DLNM Validation Results](rr_comparison_R_vs_Python.png)
+![PyDLNM vs R DLNM Validation Results](validation/rr_comparison_R_vs_Python.png)
 
 *Temperature–mortality RR curves for 10 England & Wales regions. Blue = R reference, red dashed = Python prediction using R's BLUPs, green dotted = full Python pipeline. All three are numerically identical.*
 
@@ -172,9 +172,12 @@ pydlnm/
 ├── meta_analysis.py      # MVMeta (REML) + BLUP
 ├── model_utils.py        # getcoef / getvcov / getlink helpers
 ├── utils.py              # logknots and other utilities
-├── test_against_r.py     # End-to-end 3-stage validation (England & Wales)
-├── plot_rr_comparison.py # RR curve comparison plot generator
-└── generate_r_reference.R  # Regenerates England & Wales reference data
+└── validation/
+    ├── test_against_r.py        # End-to-end 3-stage validation (England & Wales)
+    ├── plot_rr_comparison.py    # RR curve comparison plot generator
+    ├── generate_r_reference.R   # Regenerates England & Wales reference data
+    ├── reference_data/          # R reference outputs (BLUPs, RR CSVs)
+    └── rr_comparison_R_vs_Python.png
 ```
 
 ## Based on R dlnm Package
