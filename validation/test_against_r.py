@@ -32,7 +32,7 @@ from meta_analysis import MVMeta, blup
 # ── Parameters (matching R 00.prepdata.R) ─────────────────────────────────────
 VARFUN    = "bs";  VARDEGREE = 2;  VARPER = [10, 75, 90]
 LAG = 21;  LAGNK = 3;  DFSEAS = 8
-DATA_PATH   = '2015_gasparrini_Lancet_Rcodedata-master/regEngWales.csv'
+DATA_PATH   = '../2015_gasparrini_Lancet_Rcodedata-master/regEngWales.csv'
 RESULTS_DIR = 'reference_data'
 
 CODE_TO_NAME = {
@@ -120,8 +120,8 @@ for py_idx, code in enumerate(SORTED_CODES):
         r_blup_coef = np.array(ro.r(f'r_blup[[{r_idx+1}]]$blup'))
         r_blup_vcov = np.array(ro.r(f'r_blup[[{r_idx+1}]]$vcov'))
 
-    # Find reference CSV
-    csv_stem = name.replace(' & ', '___').replace(' ', '_')
+    # Find reference CSV (named by region code, not full name)
+    csv_stem = code.replace(' & ', '___').replace(' ', '_')
     csv_path = f"{RESULTS_DIR}/rr_curve_{csv_stem}.csv"
     if not os.path.exists(csv_path): continue
     r_curve = pd.read_csv(csv_path)
@@ -179,7 +179,7 @@ print(f"\n  → Mean max|ΔBLUP| = {np.mean(blup_diffs):.5f}"
 rr_rows_stage3 = []
 for py_idx, code in enumerate(SORTED_CODES):
     name  = CODE_TO_NAME[code]
-    csv_stem = name.replace(' & ', '___').replace(' ', '_')
+    csv_stem = code.replace(' & ', '___').replace(' ', '_')
     csv_path = f"{RESULTS_DIR}/rr_curve_{csv_stem}.csv"
     if not os.path.exists(csv_path): continue
     r_curve = pd.read_csv(csv_path)

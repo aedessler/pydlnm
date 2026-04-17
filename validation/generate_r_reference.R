@@ -4,7 +4,7 @@
 
 library(dlnm); library(splines); library(mvmeta)
 
-DATA_PATH <- "2015_gasparrini_Lancet_Rcodedata-master/regEngWales.csv"
+DATA_PATH <- "../2015_gasparrini_Lancet_Rcodedata-master/regEngWales.csv"
 OUT_DIR   <- "reference_data"
 dir.create(OUT_DIR, showWarnings=FALSE)
 
@@ -83,15 +83,14 @@ for (i in seq_along(regions)) {
   rr_vals  <- exp(bvar %*% blup_res[[i]]$blup)
   mmt      <- predvar[which.min(rr_vals)]
 
-  cb_pred  <- crossbasis(d$tmean, lag=lag,
-    argvar=list(fun=varfun, knots=varknots, degree=vardegree),
-    arglag=list(fun="ns",   knots=lagknots))
+  # Use onebasis (variable dimension only) without model — Gasparrini 05.plots.R approach.
+  # NB: crosspred(crossbasis, model, coef=blup) is WRONG: R ignores coef when a model
+  # is also supplied, using the model's own GLM estimates instead.
+  argvar_pred <- list(x=d$tmean, fun=varfun, knots=varknots, degree=vardegree,
+                      Boundary.knots=range(d$tmean, na.rm=TRUE))
+  bvar_pred   <- do.call(onebasis, argvar_pred)
 
-  nyears  <- length(unique(format(d$date, "%Y")))
-  model_i <- glm(death ~ cb_pred + dow + ns(date, df=dfseas*nyears),
-                 data=d, family=quasipoisson, na.action=na.exclude)
-
-  pred <- crosspred(cb_pred, model_i, coef=blup_res[[i]]$blup,
+  pred <- crosspred(bvar_pred, coef=blup_res[[i]]$blup,
                     vcov=blup_res[[i]]$vcov, model.link="log",
                     at=predvar, cen=mmt)
 

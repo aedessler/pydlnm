@@ -34,7 +34,7 @@ from meta_analysis import MVMeta, blup
 # ── Parameters ────────────────────────────────────────────────────────────────
 VARFUN = "bs"; VARDEGREE = 2; VARPER = [10, 75, 90]
 LAG = 21; LAGNK = 3; DFSEAS = 8
-DATA_PATH   = '2015_gasparrini_Lancet_Rcodedata-master/regEngWales.csv'
+DATA_PATH   = '../2015_gasparrini_Lancet_Rcodedata-master/regEngWales.csv'
 RESULTS_DIR = 'reference_data'
 
 CODE_TO_NAME = {
