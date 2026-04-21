@@ -313,10 +313,17 @@ class CrossPred:
     
     def _create_crossbasis_prediction_matrix(self, predvar: np.ndarray, predlag: np.ndarray) -> np.ndarray:
         """Create prediction matrix for cross-basis."""
-        
+
         # Create marginal basis matrices
         var_basis = OneBasis(predvar, **self.basis.argvar)
-        lag_basis = OneBasis(predlag, **self.basis.arglag)
+        # integer lag: identity matrix (each lag is independent)
+        if self.basis.arglag.get('fun') == 'integer':
+            n_lags = len(predlag)
+            lag_basis = type('_IntegerLagBasis', (), {
+                'basis': np.eye(n_lags), 'shape': (n_lags, n_lags)
+            })()
+        else:
+            lag_basis = OneBasis(predlag, **self.basis.arglag)
         
         # Apply centering if specified
         if self.cen is not None:

@@ -2,7 +2,7 @@
 
 PyDLNM is a Python implementation of distributed lag linear and non-linear models (DLMs/DLNMs) for modeling exposure-lag-response associations in epidemiological studies.
 
-**Version 0.81** — Validated against R DLNM at machine precision across two independent datasets. v0.81 fixes two bugs in the England & Wales validation scripts: the R reference generator was using the wrong `crosspred` call (same pitfall as US cities — passing a model caused R to ignore the supplied BLUPs), and the test script was silently skipping 7 of 10 regions due to a filename mismatch. All 10 regions now pass at machine precision.  Note, however, that errors might still exist.  BE CAREFUL!
+**Version 0.9** — Validated against R DLNM at machine precision across three independent datasets (England & Wales, 106 US cities, Europe Summer 2022). v0.9 adds support for natural-spline variable basis (`argvar={'fun':'ns'}`) and independent integer lag basis (`arglag={'fun':'integer'}`), enabling replication of weekly European epidemiological analyses. Note, however, that errors might still exist. BE CAREFUL!
 
 ## Validation Status
 
@@ -33,6 +33,17 @@ The full pipeline (first-stage GLMs → MVMeta → BLUP → RR curves) was run i
 | MMT agreement | Exact for 84 cities; ≤ 0.1 °C for all others |
 
 Tiny residuals in 22 cities reflect a 0.1 °C grid-step difference in MMT detection between R's `seq()` and NumPy's `arange()` — both pipelines produce the same RR curve; only the centering point differs by one grid step.
+
+### Europe Summer 2022 Heat (103 NUTS regions, Ballester *Nature Medicine* 2023)
+
+Validated via `validation/test_europe_2022.py` against R's `dlnm` + `mixmeta`. This dataset uses weekly data, natural-spline variable basis, and independent integer lags — settings not previously exercised in pydlnm.
+
+| Stage | Description | Result |
+|-------|-------------|--------|
+| 1 | First-stage GLM coefficients (103 regions) | Exact match (max\|Δcoef\| < 2e-14) |
+| 2 | MVMeta BLUPs | max\|ΔBLUP\| < 7e-7 |
+| 3 | RR curves from BLUPs | max\|ΔRR\| < 9e-7, corr = 1.0 for all regions |
+| 4 | Attributable numbers, Summer 2022 | 1.7% overall error (MC sampling differs between R and Python) |
 
 > **R `crosspred` pitfall discovered during validation:** Calling `crosspred(crossbasis, model, coef=blup, vcov=blup_vcov)` in R silently ignores the user-supplied `coef`/`vcov` whenever a `model` is also passed — R extracts the model's own GLM estimates instead. The correct R usage for BLUP-based prediction is `crosspred(onebasis, coef=blup, vcov=blup_vcov)` (no model), as in Gasparrini's own `05.plots.R`. PyDLNM's reduced-coefficient path implements this correctly and matches R at machine precision.
 
@@ -173,10 +184,14 @@ pydlnm/
 ├── model_utils.py        # getcoef / getvcov / getlink helpers
 ├── utils.py              # logknots and other utilities
 └── validation/
-    ├── test_against_r.py        # End-to-end 3-stage validation (England & Wales)
-    ├── plot_rr_comparison.py    # RR curve comparison plot generator
-    ├── generate_r_reference.R   # Regenerates England & Wales reference data
-    ├── reference_data/          # R reference outputs (BLUPs, RR CSVs)
+    ├── test_against_r.py           # 3-stage validation (England & Wales)
+    ├── test_europe_2022.py         # 4-stage validation (Europe Summer 2022)
+    ├── plot_rr_comparison.py       # RR curve comparison plot (England & Wales)
+    ├── plot_europe_rr.py           # RR curve plot for all 103 European regions
+    ├── generate_r_reference.R      # Regenerates England & Wales reference data
+    ├── generate_europe_reference.R # Generates Europe 2022 reference data
+    ├── reference_data/             # R reference outputs (England & Wales)
+    ├── europe_ref/                 # R reference outputs (Europe 2022)
     └── rr_comparison_R_vs_Python.png
 ```
 
@@ -187,6 +202,7 @@ This Python implementation is based on the R `dlnm` package by Antonio Gasparrin
 - Gasparrini A. Distributed lag linear and non-linear models in R: the package dlnm. *Journal of Statistical Software*. 2011; **43**(8):1-20.
 - Gasparrini A, Scheipl F, Armstrong B, Kenward MG. A penalized framework for distributed lag non-linear models. *Biometrics*. 2017; **73**(3):938-948.
 - Gasparrini A et al. Mortality risk attributable to high and low ambient temperature. *The Lancet*. 2015; **386**(9991):369-375.
+- Ballester J et al. Heat-related mortality in Europe during the summer of 2022. *Nature Medicine*. 2023; **29**:1857–1866.
 
 R reference code from [Gasparrini's GitHub](https://github.com/gasparrini/2015_gasparrini_Lancet_Rcodedata).
 

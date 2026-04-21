@@ -209,8 +209,13 @@ def _reduce_overall_exact(crossbasis: CrossBasis,
     if 'cen' in arglag:
         del arglag['cen']
     
-    lag_basis_obj = OneBasis(lag_sequence, **arglag)
-    lagbasis = lag_basis_obj.basis
+    if arglag.get('fun') == 'integer':
+        # Each lag is independent: identity matrix as lag basis
+        n_lags = len(lag_sequence)
+        lagbasis = np.eye(n_lags)
+    else:
+        lag_basis_obj = OneBasis(lag_sequence, **arglag)
+        lagbasis = lag_basis_obj.basis
     
     # R's transformation matrix construction
     # t(rep(1,diff(lag)+1)) %*% lagbasis

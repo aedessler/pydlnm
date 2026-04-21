@@ -186,14 +186,21 @@ class SplineBasis(BaseBasisFunction):
     """
     
     def __init__(self, df: int = 4, knots: Optional[np.ndarray] = None,
-                 intercept: bool = False, **kwargs):
+                 intercept: bool = False,
+                 Boundary_knots: Optional[np.ndarray] = None, **kwargs):
         super().__init__(df=df, knots=knots, intercept=intercept, **kwargs)
         self.df = df
         self.knots = knots
         self.intercept = intercept
+        self.Boundary_knots = (np.asarray(Boundary_knots, dtype=float)
+                               if Boundary_knots is not None else None)
         self.attributes['fun'] = 'ns'
         self.attributes['df'] = df
         self.attributes['intercept'] = intercept
+        if knots is not None:
+            self.attributes['knots'] = np.asarray(knots, dtype=float)
+        if self.Boundary_knots is not None:
+            self.attributes['Boundary_knots'] = self.Boundary_knots
         self._check_rpy2()
     
     def _check_rpy2(self):
@@ -219,16 +226,33 @@ class SplineBasis(BaseBasisFunction):
             Natural spline basis matrix
         """
         x = np.asarray(x, dtype=float)
-        
+
         # Use R's natural splines for exact compatibility
         with localconverter(robjects.default_converter + numpy2ri.converter):
+            bk = (self.Boundary_knots if self.Boundary_knots is not None
+                  else np.array([np.nanmin(x), np.nanmax(x)]))
+            robjects.globalenv['_ns_x']  = x
+            robjects.globalenv['_ns_bk'] = bk
             if self.knots is not None:
                 knots_array = np.asarray(self.knots, dtype=float)
-                r_result = splines.ns(x, knots=knots_array, intercept=self.intercept)
+                robjects.globalenv['_ns_ik'] = knots_array
+                r_result = robjects.r(
+                    f'splines::ns(`_ns_x`, knots=`_ns_ik`, '
+                    f'intercept={"TRUE" if self.intercept else "FALSE"}, '
+                    f'Boundary.knots=`_ns_bk`)'
+                )
             elif self.df is not None:
-                r_result = splines.ns(x, df=self.df, intercept=self.intercept)
+                r_result = robjects.r(
+                    f'splines::ns(`_ns_x`, df={int(self.df)}, '
+                    f'intercept={"TRUE" if self.intercept else "FALSE"}, '
+                    f'Boundary.knots=`_ns_bk`)'
+                )
             else:
-                r_result = splines.ns(x, df=4, intercept=self.intercept)
+                r_result = robjects.r(
+                    f'splines::ns(`_ns_x`, df=4, '
+                    f'intercept={"TRUE" if self.intercept else "FALSE"}, '
+                    f'Boundary.knots=`_ns_bk`)'
+                )
             
             # Convert to numpy
             basis_matrix = np.array(r_result)

@@ -283,13 +283,15 @@ class CrossBasis:
         # Ensure natural splines are used for lag by default (like R)
         if 'fun' not in self.arglag:
             self.arglag['fun'] = 'ns'
-        
-        # Add intercept by default for lag basis if not specified - MATCH R CROSSBASIS DEFAULT  
-        if 'intercept' not in self.arglag:
-            self.arglag['intercept'] = True  # R crossbasis uses intercept=TRUE for lag basis by default
-        
-        # Force uncentered transformations for lag
-        self.arglag['cen'] = None
+
+        # intercept/cen injection not applicable for integer lag
+        if self.arglag.get('fun') != 'integer':
+            # Add intercept by default for lag basis if not specified - MATCH R CROSSBASIS DEFAULT
+            if 'intercept' not in self.arglag:
+                self.arglag['intercept'] = True  # R crossbasis uses intercept=TRUE for lag basis by default
+
+            # Force uncentered transformations for lag
+            self.arglag['cen'] = None
         
         # Store group for potential seasonal analysis
         self.group = group
@@ -323,7 +325,15 @@ class CrossBasis:
 
         # Create lag basis
         lag_seq = seqlag(self.lag)
-        self.basislag = OneBasis(lag_seq, **self.arglag)
+        if self.arglag.get('fun') == 'integer':
+            # Each lag is independent; lag basis is the identity matrix
+            n_lags = len(lag_seq)
+            _identity = np.eye(n_lags)
+            self.basislag = type('_IntegerLagBasis', (), {
+                'basis': _identity, 'shape': (n_lags, n_lags), 'fun': 'integer'
+            })()
+        else:
+            self.basislag = OneBasis(lag_seq, **self.arglag)
         
         # Store degrees of freedom
         self.df = (self.basisvar.shape[1], self.basislag.shape[1])
@@ -370,41 +380,54 @@ class CrossBasis:
         from rpy2.robjects.conversion import localconverter
         
         # Create variable basis using R
+        var_fun = self.argvar.get('fun', 'bs')
         with localconverter(robjects.default_converter + numpy2ri.converter):
             robjects.globalenv['temp_data'] = exposure_values
-            
+
             # Store boundary knots from training data if not already set
             if 'Boundary_knots' not in self.argvar:
                 x_clean = exposure_values[~np.isnan(exposure_values)]
                 self.argvar['Boundary_knots'] = np.array([x_clean.min(), x_clean.max()])
             robjects.globalenv['bk_vals'] = self.argvar['Boundary_knots']
 
-            if 'knots' in self.argvar:
-                robjects.globalenv['var_knots'] = self.argvar['knots']
-                degree = self.argvar.get('degree', 3)
-                robjects.r(f'var_basis <- bs(temp_data, knots=var_knots, degree={degree}, Boundary.knots=bk_vals)')
-            else:
-                df = self.argvar.get('df', 3)
-                degree = self.argvar.get('degree', 3)
-                robjects.r(f'var_basis <- bs(temp_data, df={df}, degree={degree}, Boundary.knots=bk_vals)')
-            
+            if var_fun == 'ns':
+                if 'knots' in self.argvar:
+                    robjects.globalenv['var_knots'] = self.argvar['knots']
+                    robjects.r('var_basis <- ns(temp_data, knots=var_knots, Boundary.knots=bk_vals)')
+                else:
+                    df = self.argvar.get('df', 4)
+                    robjects.r(f'var_basis <- ns(temp_data, df={df}, Boundary.knots=bk_vals)')
+            else:  # bs (default)
+                if 'knots' in self.argvar:
+                    robjects.globalenv['var_knots'] = self.argvar['knots']
+                    degree = self.argvar.get('degree', 3)
+                    robjects.r(f'var_basis <- bs(temp_data, knots=var_knots, degree={degree}, Boundary.knots=bk_vals)')
+                else:
+                    df = self.argvar.get('df', 3)
+                    degree = self.argvar.get('degree', 3)
+                    robjects.r(f'var_basis <- bs(temp_data, df={df}, degree={degree}, Boundary.knots=bk_vals)')
+
             r_var_basis = np.array(robjects.r('var_basis'))
-        
-        # Create lag basis using R
-        with localconverter(robjects.default_converter + numpy2ri.converter):
-            lag_values = np.array(lag_seq, dtype=float)
-            robjects.globalenv['lag_seq'] = lag_values
-            
-            if 'knots' in self.arglag:
-                robjects.globalenv['lag_knots'] = self.arglag['knots']
-                intercept = self.arglag.get('intercept', True)
-                robjects.r(f'lag_basis <- ns(lag_seq, knots=lag_knots, intercept={str(intercept).upper()})')
-            else:
-                df = self.arglag.get('df', 4)
-                intercept = self.arglag.get('intercept', True)
-                robjects.r(f'lag_basis <- ns(lag_seq, df={df}, intercept={str(intercept).upper()})')
-            
-            r_lag_basis = np.array(robjects.r('lag_basis'))
+
+        # Create lag basis — identity for integer lags, otherwise ns via R
+        lag_fun = self.arglag.get('fun', 'ns')
+        if lag_fun == 'integer':
+            r_lag_basis = np.eye(len(lag_seq))
+        else:
+            with localconverter(robjects.default_converter + numpy2ri.converter):
+                lag_values = np.array(lag_seq, dtype=float)
+                robjects.globalenv['lag_seq'] = lag_values
+
+                if 'knots' in self.arglag:
+                    robjects.globalenv['lag_knots'] = self.arglag['knots']
+                    intercept = self.arglag.get('intercept', True)
+                    robjects.r(f'lag_basis <- ns(lag_seq, knots=lag_knots, intercept={str(intercept).upper()})')
+                else:
+                    df = self.arglag.get('df', 4)
+                    intercept = self.arglag.get('intercept', True)
+                    robjects.r(f'lag_basis <- ns(lag_seq, df={df}, intercept={str(intercept).upper()})')
+
+                r_lag_basis = np.array(robjects.r('lag_basis'))
         
         # Build the cross-basis using vectorized matrix multiplications.
         # For each variable basis column v:
