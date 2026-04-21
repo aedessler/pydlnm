@@ -184,14 +184,10 @@ pydlnm/
 ├── model_utils.py        # getcoef / getvcov / getlink helpers
 ├── utils.py              # logknots and other utilities
 └── validation/
-    ├── test_against_r.py           # 3-stage validation (England & Wales)
-    ├── test_europe_2022.py         # 4-stage validation (Europe Summer 2022)
-    ├── plot_rr_comparison.py       # RR curve comparison plot (England & Wales)
-    ├── plot_europe_rr.py           # RR curve plot for all 103 European regions
-    ├── generate_r_reference.R      # Regenerates England & Wales reference data
-    ├── generate_europe_reference.R # Generates Europe 2022 reference data
-    ├── reference_data/             # R reference outputs (England & Wales)
-    ├── europe_ref/                 # R reference outputs (Europe 2022)
+    ├── test_against_r.py        # End-to-end 3-stage validation (England & Wales)
+    ├── plot_rr_comparison.py    # RR curve comparison plot generator
+    ├── generate_r_reference.R   # Regenerates England & Wales reference data
+    ├── reference_data/          # R reference outputs (BLUPs, RR CSVs)
     └── rr_comparison_R_vs_Python.png
 ```
 

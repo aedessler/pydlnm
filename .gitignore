@@ -151,12 +151,6 @@ $RECYCLE.BIN/
 
 # Explicit whitelists that override the above exclusions (must come last)
 !validation/generate_r_reference.R
-!validation/generate_europe_reference.R
 !validation/reference_data/*.csv
 !validation/reference_data/*.rds
-!validation/europe_ref/
-!validation/europe_ref/*.csv
-!validation/europe_ref/rr_curves/
-!validation/europe_ref/rr_curves/*.csv
 !validation/rr_comparison_R_vs_Python.png
-!validation/plot_europe_rr_pydlnm.pdf
