@@ -222,7 +222,6 @@ def test_find_mmt_function_with_model_object_matches_r(fits):
         assert float(res['mmt']) == _r_mmt('cm3_cb', 'cm3_coef_death', 'cm3_vcov_death', grid)
 
 
-@known_defect('M3', 'centering-16', note='CenteringManager._mmt_cache is filled once and never looks at `at`')
 def test_manager_find_mmt_follows_changed_grid(fits):
     """find_mmt(at=A) then find_mmt(at=B) on one manager: the second answer is R's MMT on grid B (10.0), not the
     cached MMT of grid A (25.0, which is not even inside grid B)."""
@@ -239,7 +238,6 @@ def test_manager_find_mmt_follows_changed_grid(fits):
     assert_close(second['predvar'], GRID_B, rtol=0, what='grid searched by the 2nd call')
 
 
-@known_defect('M3', 'centering-16', note='result depends on which call came first')
 def test_manager_find_mmt_is_order_independent(fits):
     """Fresh manager, grid B first and grid A second: the answer for A must still be A's (R: 25.0)."""
     from centering import CenteringManager
@@ -253,7 +251,6 @@ def test_manager_find_mmt_is_order_independent(fits):
     assert float(second['mmt']) == mmt_a, f'grid A asked second: MMT {float(second["mmt"])!r} vs R {mmt_a!r}'
 
 
-@known_defect('M3', 'centering-16', note='cached dict of method="overall" is returned for method="lagspecific"')
 def test_manager_find_mmt_follows_method(fits):
     """overall then lagspecific on the same grid: the 2nd result is the lag-specific one (method label, the curve of
     R's first matfit column, and its MMT, which differs from the overall MMT)."""
@@ -274,7 +271,6 @@ def test_manager_find_mmt_follows_method(fits):
     assert float(second['mmt']) == mmt_lag
 
 
-@known_defect('M3', 'centering-16', note='cache not invalidated when manager.model / manager.basis are re-assigned')
 @pytest.mark.parametrize('change', ['model_only', 'basis_and_model'])
 def test_manager_find_mmt_not_stale_after_model_or_basis_change(fits, change):
     """The public attributes `model` (and `basis`) of the manager are re-assigned; a repeated find_mmt(at=grid) must be
@@ -301,7 +297,6 @@ def test_manager_find_mmt_not_stale_after_model_or_basis_change(fits, change):
 
 
 # ============================= centering-16: compare_centering_strategies / compare_centering ========================
-@known_defect('M3', 'centering-16', note="compare_centering_strategies calls self.find_mmt() bare: 21-point default grid")
 def test_compare_strategies_mmt_uses_prediction_grid(fits):
     """compare_centering_strategies(['mmt'], at=grid): the MMT used as centring value is the one of the same `at` grid
     the predictions use (R: which.min of crosspred allfit on that grid = 25.25), not of a hidden default grid."""
@@ -321,7 +316,6 @@ def test_compare_strategies_mmt_uses_prediction_grid(fits):
         assert_close(rec['allfit'], rget('as.numeric(cm3_p$allfit)'), rtol=1e-9, what='allfit centred at the MMT')
 
 
-@known_defect('M3', 'centering-16', note="results keyed f'cen_{value}': equal centring values collapse, names are kept")
 def test_compare_strategies_keeps_one_result_per_strategy(fits):
     """Median and a custom value equal to the median (and mean + equal custom mean) are different strategies: 4 names
     must come with (at least) 4 result records, so that every label can be mapped back to its result."""
@@ -380,7 +374,6 @@ def test_compare_strategies_automatic_values_match_r(fits):
 
 
 # ======================================== centering-16: recenter_at_mmt vs manager history ===========================
-@known_defect('M3', 'centering-16', note='recenter_at_mmt calls recenter_basis directly: no history entry')
 def test_recenter_at_mmt_is_recorded_in_history(fits):
     """recenter_at_value() appends to the manager's history; recenter_at_mmt() must too (one code path), with the MMT
     that R finds on the same grid as the centring value."""
@@ -450,7 +443,6 @@ def _py_blup(x, blup, **kw):
     return res, [str(w.message) for w in caught]
 
 
-@known_defect('M3', 'centering-17', note="`fun` is never used: fun='ns' builds a B-spline with the wrong column count")
 @pytest.mark.parametrize('which,seed', [('a', 11), ('b', 12)])
 def test_blup_fun_ns_is_a_natural_spline(which, seed):
     """fun='ns' with 3 knots has 4 columns in R's onebasis: a 4-coefficient BLUP gives R's risk curve and MMT (grid
@@ -466,7 +458,6 @@ def test_blup_fun_ns_is_a_natural_spline(which, seed):
     assert int(res['percentile']) == ref['percentile'] and float(res['mmt']) == ref['mmt']
 
 
-@known_defect('M3', 'centering-17', note="`fun='ns'` silently returns the B-spline answer (same column count)")
 def test_blup_fun_is_not_silently_ignored():
     """4 interior knots: bs(degree=1) and ns both have 5 columns, so a 5-coefficient BLUP is conformable with either and
     nothing fails -- but the curves differ.  fun='ns' must give R's ns risk curve, not the bs(degree=1) one."""
@@ -483,7 +474,6 @@ def test_blup_fun_is_not_silently_ignored():
     assert int(res['percentile']) == ref_ns['percentile'] and float(res['mmt']) == ref_ns['mmt']
 
 
-@known_defect('M3', 'centering-17', note='unsupported `fun` is accepted and a B-spline is built')
 def test_blup_unknown_fun_raises():
     """R: onebasis(fun="nosuchfun") stops (match.fun).  find_mmt_blup must reject it instead of answering with a
     B-spline."""
@@ -498,7 +488,6 @@ def test_blup_unknown_fun_raises():
         pytest.fail(f'no error; returned method={res.get("method")!r} mmt={res.get("mmt")!r}')
 
 
-@known_defect('M3', 'centering-17', note='np.argmin returns the first NaN: MMT at percentile 1')
 @pytest.mark.parametrize('pos', [0, 2, 4])
 def test_blup_nan_coefficient_is_an_error(pos):
     """A NaN BLUP coefficient makes every risk value NaN; R's which.min() then returns integer(0) (no MMT) and the
@@ -520,7 +509,6 @@ def test_blup_nan_coefficient_is_an_error(pos):
                     f'mmt={res.get("mmt")!r}')
 
 
-@known_defect('M3', 'centering-17', note='x[~np.isnan(x)] on a list raises TypeError before the try block')
 @pytest.mark.parametrize('prange', [(1, 99), (0, 100)])
 def test_blup_accepts_python_list_for_x(prange):
     """R's quantile() takes a plain vector; a Python list for x must give the same result as the ndarray (and so not
@@ -595,7 +583,6 @@ def test_find_mmt_lagspecific_uses_first_prediction_lag(lag):
         'lagspecific must not silently become the summed (overall) curve')
 
 
-@known_defect('M3', 'centering-20', note="inline comment says 'sum of lag-specific effects at lag 0'; first lag is used")
 def test_lagspecific_documentation_matches_behaviour():
     """The code searches the first lag of the prediction lag range (matfit[:, 0]: lag3 for lag=[3,10]; see the plain test
     above), not lag 0 and not a sum.  The comment must not claim that, and the docstring (or an explicit `lag`

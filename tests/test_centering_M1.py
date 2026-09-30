@@ -166,7 +166,6 @@ def _r_crosspred(grid, cen):
 
 
 # ==================================== known defect: find_mmt_blup (M1, basis-cont-5) ===================================
-@known_defect('M1', 'basis-cont-5', note='include_intercept/boundary_knots swallowed by **kwargs; basis uses range(predvar)')
 @pytest.mark.parametrize('city', BASIS_CITIES)
 def test_blup_basis_matrix_matches_r_onebasis(city):
     """The bs basis inside find_mmt_blup is R's onebasis(predvar, 'bs', knots, degree=2, Boundary.knots=range(x))."""
@@ -179,7 +178,6 @@ def test_blup_basis_matrix_matches_r_onebasis(city):
     assert_close(res['risk_values'], ref['risk'], rtol=1e-9, what=f'{city}: bvar %*% blup')
 
 
-@known_defect('M1', 'basis-cont-5', note='wrong boundary knots => argmin of bvar %*% blup moves')
 def test_blup_mmt_matches_r_which_min():
     """MMT percentile and temperature of find_mmt_blup (default knots, as used by calculate_pooled_mmts) equal R's."""
     cities = _spread_cities(12)
@@ -197,7 +195,6 @@ def test_blup_mmt_matches_r_which_min():
     assert not bad, f'{len(bad)}/{len(cities)} cities differ from R:\n  ' + '\n  '.join(bad)
 
 
-@known_defect('M1', 'basis-cont-5', note='same misspelled Boundary_knots for every degree / knot set')
 @pytest.mark.parametrize('degree,varper', [(2, (10, 75, 90)), (3, (10, 75, 90)), (3, (25, 75)), (2, (50,)), (1, (33, 66))],
                          ids=['deg2-k3', 'deg3-k3', 'deg3-k2', 'deg2-k1', 'deg1-k2'])
 def test_blup_basis_option_combinations(degree, varper):
@@ -211,7 +208,6 @@ def test_blup_basis_option_combinations(degree, varper):
         _assert_blup_result_matches_r(res, ref, f'{city} degree={degree} knots at P{list(varper)}')
 
 
-@known_defect('M1', 'basis-cont-5', note='percentile_range other than (1, 99): grid range still replaces range(x)')
 @pytest.mark.parametrize('prange', [(2, 98), (5, 95), (10, 90)], ids=['p2-98', 'p5-95', 'p10-90'])
 def test_blup_basis_percentile_range(prange):
     """Search percentile ranges: R's (lo:hi)[which.min(bvar %*% blup)] with the basis on range(x) boundary knots."""
@@ -224,7 +220,6 @@ def test_blup_basis_percentile_range(prange):
         _assert_blup_result_matches_r(res, ref, f'{city} percentile_range={prange}')
 
 
-@known_defect('M1', 'basis-cont-5', note='NaN in x: R uses na.rm=TRUE for knots, grid and Boundary.knots')
 def test_blup_basis_with_nan_in_x():
     """Missing temperatures are ignored for the grid, the knots and the boundary knots, as in R (na.rm=TRUE)."""
     x = _city_series('Tulsa')
@@ -235,7 +230,6 @@ def test_blup_basis_with_nan_in_x():
     _assert_blup_result_matches_r(res, ref, 'Tulsa with NaN')
 
 
-@known_defect('M1', 'basis-cont-5', note='realistic reduced coefficients; wrong boundary knots')
 def test_blup_mmt_realistic_reduced_coef_chicago(chicago_model):
     """Overall-cumulative coefficients from R crossreduce() on chicagoNMMAPS play the role of a BLUP."""
     x = chicago_model.temp
@@ -246,7 +240,6 @@ def test_blup_mmt_realistic_reduced_coef_chicago(chicago_model):
     _assert_blup_result_matches_r(res, ref, 'chicagoNMMAPS reduced coef')
 
 
-@known_defect('M1', 'basis-cont-5', note='blanket except returns a median fallback instead of raising')
 def test_blup_wrong_length_raises_like_r():
     """R: bvar %*% blup with a wrong-length blup stops with 'non-conformable arguments'.  Python must raise as well,
     not report the median temperature as an MMT."""
@@ -259,7 +252,6 @@ def test_blup_wrong_length_raises_like_r():
         pytest.fail(f'no error; returned method={res.get("method")!r} mmt={res.get("mmt")!r}')
 
 
-@known_defect('M1', 'basis-cont-5', note='calculate_pooled_mmts calls find_mmt_blup(fun="bs", degree=2) with default knots')
 def test_calculate_pooled_mmts_matches_r():
     """Public wrapper: per-region MMT (percentile, temperature) and the pooled median/mean equal the R workflow."""
     import contextlib

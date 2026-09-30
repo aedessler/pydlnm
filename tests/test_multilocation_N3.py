@@ -295,7 +295,6 @@ def test_pooled_mmt_matches_r_when_first_stage_basis_has_the_same_width(spec_key
     assert_pooled_mmt_matches_r(pipeline(spec_key))
 
 
-@known_defect(THEME, 'mvmeta-blup-2', note="blanket except in find_mmt_blup: method='median_fallback' pooled as a real MMT")
 @pytest.mark.parametrize('spec_key', WIDTH_MISMATCH)
 def test_pooled_mmt_never_reports_a_median_fallback(spec_key):
     """A valid first-stage basis must never end in the 'median fallback' (regional median temperature dressed up as MMT
@@ -307,7 +306,6 @@ def test_pooled_mmt_never_reports_a_median_fallback(spec_key):
                                         f'percentiles {[round(float(run.pm["region_mmts"][n]["percentile"]), 1) for n in fallbacks]}')
 
 
-@known_defect(THEME, 'mvmeta-blup-2', note='a failing MMT search is replaced by the median temperature instead of an error')
 def test_failed_mmt_search_is_not_replaced_by_the_median_temperature():
     """R: bvar %*% blup with a BLUP of the wrong length stops ('non-conformable').  PyDLNM may raise or leave the region out
     of the pooled statistics, but must not report its median temperature as an MMT."""
@@ -328,7 +326,6 @@ def test_failed_mmt_search_is_not_replaced_by_the_median_temperature():
         'the median temperature of the failed region is pooled with the real MMTs'
 
 
-@known_defect(THEME, 'mvmeta-blup-2', note='find_mmt_blup never reads `fun`: ns is built as a B-spline')
 @pytest.mark.parametrize('per', [(10, 75, 90), (20, 40, 60, 80)], ids=['ns4cols', 'ns5cols'])
 def test_find_mmt_blup_honours_fun_ns(per):
     """find_mmt_blup(fun='ns', knots=...) documents `fun` as the basis function type; R: onebasis(fun='ns', knots=...).

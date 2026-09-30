@@ -21,89 +21,80 @@ def find_mmt_blup(x: np.ndarray,
                   degree: int = 2,
                   percentile_range: Tuple[int, int] = (1, 99)) -> Dict:
     """
-    Find minimum mortality temperature using BLUP coefficients (R-style method)
-    
-    This implements the same methodology as the R dlnm package's MMT calculation
-    using BLUP (Best Linear Unbiased Predictors) coefficients.
+    Find the minimum mortality temperature from BLUP coefficients (Gasparrini et al. 2015, 02.secondstage.R)
+
+    R recipe: ``predvar <- quantile(x, 1:99/100)``, ``bvar <- onebasis(predvar, fun, knots=quantile(x, c(10,75,90)/100),
+    degree, Boundary.knots=range(x))``, ``minperccity <- (1:99)[which.min(bvar %*% blup)]``. The boundary knots are
+    the range of ``x``, not of the percentile grid.
     
     Parameters:
     -----------
     x : array-like
-        Temperature time series data
+        Temperature time series data (NaN are ignored)
     blup_coef : array-like 
-        BLUP coefficients from meta-analysis
-    fun : str, default "bs"
-        Basis function type
+        BLUP (reduced) coefficients from the meta-analysis, one per column of the exposure basis
+    fun : {"bs", "ns"}, default "bs"
+        Exposure basis function
     knots : array-like, optional
-        Knot positions for basis functions
+        Interior knots (default: the 10th, 75th and 90th percentiles of ``x``)
     degree : int, default 2
-        Degree of basis functions
+        Degree of the B-spline (ignored for "ns")
     percentile_range : tuple, default (1, 99)
-        Range of percentiles to search for MMT
+        Range of (integer) percentiles searched for the MMT
         
     Returns:
     --------
     dict
-        Dictionary containing MMT results
+        ``mmt`` (temperature), ``percentile``, ``min_risk``, ``risk_range``, ``predvar``, ``risk_values``,
+        ``basis_matrix`` and ``method``.
+
+    Raises
+    ------
+    ValueError
+        For an unsupported ``fun``, coefficients that do not match the basis, or NaN risks (R: which.min gives
+        integer(0) and no MMT).
     """
-    from basis_functions import BSplineBasis
+    from basis import OneBasis
     
-    # Create prediction range (1st to 99th percentiles like R)
-    predvar = np.percentile(x[~np.isnan(x)], 
-                          np.arange(percentile_range[0], percentile_range[1] + 1))
+    x = np.asarray(x, dtype=float).ravel()
+    x = x[~np.isnan(x)]
+    blup_coef = np.asarray(blup_coef, dtype=float).ravel()
     
-    # Set up basis function arguments like R's onebasis
+    # Prediction grid: percentiles of x (R: quantile, type 7)
+    percentiles = np.arange(percentile_range[0], percentile_range[1] + 1)
+    predvar = np.percentile(x, percentiles)
+    
     if knots is None:
-        # Default knots at 10%, 75%, 90% percentiles
-        knots = np.percentile(x[~np.isnan(x)], [10, 75, 90])
+        knots = np.percentile(x, [10, 75, 90])
+    boundary = np.array([np.min(x), np.max(x)])
     
-    # Create basis matrix for prediction range with boundary knots
-    x_range = np.array([np.min(x[~np.isnan(x)]), np.max(x[~np.isnan(x)])])
+    if fun == "bs":
+        args = {'knots': knots, 'degree': degree, 'Boundary_knots': boundary}
+    elif fun == "ns":
+        args = {'knots': knots, 'Boundary_knots': boundary}
+    else:
+        raise ValueError(f"fun must be 'bs' or 'ns', not {fun!r}")
+    bvar = OneBasis(predvar, fun=fun, **args).basis
     
-    try:
-        basis_func = BSplineBasis(
-            knots=knots,
-            degree=degree,
-            include_intercept=True,
-            boundary_knots=x_range
-        )
-        
-        # Generate basis matrix for prediction temperatures
-        bvar = basis_func.transform(predvar.reshape(-1, 1))
-        
-        # Calculate risk values: bvar %*% blup_coef (like R)
-        risk_values = bvar @ blup_coef
-        
-        # Find minimum risk point
-        min_idx = np.argmin(risk_values)
-        mmt_percentile = percentile_range[0] + min_idx
-        mmt_temperature = predvar[min_idx]
-        
-        result = {
-            'mmt': mmt_temperature,
-            'percentile': mmt_percentile,
-            'min_risk': risk_values[min_idx],
-            'risk_range': (np.min(risk_values), np.max(risk_values)),
-            'predvar': predvar,
-            'risk_values': risk_values,
-            'basis_matrix': bvar,
-            'method': 'blup_optimization'
-        }
-        
-        return result
-        
-    except Exception as e:
-        # Fallback to simpler method if basis function fails
-        warnings.warn(f"BLUP MMT calculation failed ({e}), using median fallback")
-        median_temp = np.median(x[~np.isnan(x)])
-        median_percentile = np.mean(x[~np.isnan(x)] <= median_temp) * 100
-        
-        return {
-            'mmt': median_temp,
-            'percentile': median_percentile,
-            'method': 'median_fallback',
-            'error': str(e)
-        }
+    if bvar.shape[1] != len(blup_coef):
+        raise ValueError(f"{len(blup_coef)} BLUP coefficients do not match the {bvar.shape[1]} columns of the basis")
+    
+    # Risk values: bvar %*% blup; the minimum risk point (R: which.min)
+    risk_values = bvar @ blup_coef
+    if np.isnan(risk_values).all():
+        raise ValueError("no MMT: the risk values are all NaN (NaN in the BLUP coefficients?)")
+    min_idx = int(np.nanargmin(risk_values))
+    
+    return {
+        'mmt': predvar[min_idx],
+        'percentile': int(percentiles[min_idx]),
+        'min_risk': risk_values[min_idx],
+        'risk_range': (np.nanmin(risk_values), np.nanmax(risk_values)),
+        'predvar': predvar,
+        'risk_values': risk_values,
+        'basis_matrix': bvar,
+        'method': 'blup_optimization'
+    }
 
 
 def find_mmt(basis: CrossBasis, 
@@ -137,7 +128,9 @@ def find_mmt(basis: CrossBasis,
     by : float, optional
         Step size for search range
     method : str, default "overall"
-        Method for MMT calculation: "overall" or "lagspecific"
+        Method for MMT calculation: "overall" searches the overall (summed over lags) effect; "lagspecific"
+        searches the lag-specific effect at the first lag of the prediction lag range (``basis.lag[0]``, column 0
+        of ``matfit``; lag 0 for the usual lag range starting at 0)
         
     Returns:
     --------
@@ -175,7 +168,7 @@ def find_mmt(basis: CrossBasis,
         fit_values = pred.allfit
         se_values = pred.allse
     elif method == "lagspecific":
-        # Use sum of lag-specific effects at lag 0 (if available)
+        # Lag-specific effect at the first lag of the prediction lag range (column 0 of matfit)
         if pred.matfit.shape[1] > 0:
             fit_values = pred.matfit[:, 0]  # First lag
             se_values = pred.matse[:, 0]
@@ -322,8 +315,13 @@ def compare_centering(basis: CrossBasis,
                 at=at
             )
             
-            # Store key results
-            results[f'cen_{cen_val}'] = {
+            # Store key results (repeated centering values keep one record each)
+            key = f'cen_{cen_val}'
+            dup = 2
+            while key in results:
+                key = f'cen_{cen_val}_{dup}'
+                dup += 1
+            results[key] = {
                 'centering': cen_val,
                 'predvar': pred.predvar,
                 'allfit': pred.allfit,
@@ -333,13 +331,13 @@ def compare_centering(basis: CrossBasis,
             
             # Add RR results if available
             if hasattr(pred, 'allRRfit'):
-                results[f'cen_{cen_val}']['allRRfit'] = pred.allRRfit
-                results[f'cen_{cen_val}']['allRRlow'] = pred.allRRlow
-                results[f'cen_{cen_val}']['allRRhigh'] = pred.allRRhigh
+                results[key]['allRRfit'] = pred.allRRfit
+                results[key]['allRRlow'] = pred.allRRlow
+                results[key]['allRRhigh'] = pred.allRRhigh
                 
         except Exception as e:
             warnings.warn(f"Failed to compute predictions for centering {cen_val}: {e}")
-            results[f'cen_{cen_val}'] = None
+            results.setdefault(f'cen_{cen_val}', None)
     
     # Add summary statistics
     results['summary'] = {
@@ -368,19 +366,39 @@ class CenteringManager:
         """
         self.basis = basis
         self.model = model
-        self._mmt_cache = None
+        self._mmt_cache = {}
         self._centering_history = []
     
+    @staticmethod
+    def _freeze(value: Any) -> Any:
+        """Hashable form of an argument (arrays by content)."""
+        if isinstance(value, np.ndarray):
+            return ('ndarray', value.shape, str(value.dtype), value.tobytes())
+        if isinstance(value, (list, tuple)):
+            return tuple(CenteringManager._freeze(v) for v in value)
+        if isinstance(value, dict):
+            return tuple(sorted((k, CenteringManager._freeze(v)) for k, v in value.items()))
+        return value
+    
     def find_mmt(self, **kwargs) -> Dict:
-        """Find MMT with caching"""
-        if self._mmt_cache is None:
-            self._mmt_cache = find_mmt(self.basis, self.model, **kwargs)
-        return self._mmt_cache
+        """Find MMT, cached per (arguments, model, basis): a call with other arguments, or after the model or
+        the basis of the manager was replaced, is computed afresh."""
+        key = self._freeze(kwargs)
+        entry = self._mmt_cache.get(key)
+        if entry is None or entry[0] is not self.basis or entry[1] is not self.model:
+            entry = (self.basis, self.model, find_mmt(self.basis, self.model, **kwargs))
+            self._mmt_cache[key] = entry
+        return entry[2]
     
     def recenter_at_mmt(self, **kwargs) -> Tuple[CrossBasis, Dict]:
-        """Convenience method to recenter at MMT"""
-        return recenter_basis(self.basis, self.model, cen=None, 
-                            find_mmt_args=kwargs)
+        """Convenience method to recenter at MMT (recorded in the history like recenter_at_value)"""
+        result = recenter_basis(self.basis, self.model, cen=None, find_mmt_args=kwargs)
+        self._centering_history.append({
+            'method': 'mmt',
+            'value': result[1]['value'],
+            'timestamp': None
+        })
+        return result
     
     def recenter_at_value(self, cen: float) -> Tuple[CrossBasis, Dict]:
         """Convenience method to recenter at specific value"""
@@ -431,7 +449,9 @@ class CenteringManager:
         
         for strategy in strategies:
             if strategy == 'mmt':
-                mmt_info = self.find_mmt()
+                # the MMT is searched on the same exposure grid as the predictions
+                mmt_info = self.find_mmt(**{k: kwargs[k] for k in ('at', 'from_val', 'to_val', 'by')
+                                            if kwargs.get(k) is not None})
                 centering_values.append(mmt_info['mmt'])
                 strategy_names.append('MMT')
             elif strategy == 'mean' and x_data is not None:
