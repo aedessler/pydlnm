@@ -1,7 +1,7 @@
 """BASELINE: the validated happy path of PyDLNM versus R dlnm 2.4.10 / mvmeta 1.0.3 / mixmeta 1.2.0.
 
 Nothing in this module is a known defect: there is no @known_defect test here. Every test asserts behaviour that is
-ALREADY faithful to R and that the audit fixes (themes A1-S1, see audit_handoff_2026-09-29/findings/root_cause_themes.md)
+ALREADY faithful to R and that the audit fixes (themes A1-S1, see audit_handoff_2026-09-30/findings/root_cause_themes.md)
 must not break, so the module is the regression backbone while the fixes land. All reference numbers are computed by R
 at test run time on inputs that both sides receive (rpy2); nothing is copied from Python output and there are no
 scaling constants. Deterministic algebra is compared to <= 1e-10 relative (mostly 1e-11/1e-12; the audit measured

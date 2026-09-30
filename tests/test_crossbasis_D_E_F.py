@@ -5,7 +5,7 @@ inputs; nothing is copied from Python output.  Tests marked ``known_defect`` ass
 PyDLNM does not have yet (strict xfail: they must fail today and pass once the defect is fixed, at which point the
 marker has to be removed in the fix commit).  Unmarked tests guard neighbouring behaviour that is already faithful.
 
-Themes and findings (audit_handoff_2026-09-29/findings/root_cause_themes.md)
+Themes and findings (audit_handoff_2026-09-30/findings/root_cause_themes.md)
 
   D  CrossBasis writes into the caller's argvar/arglag dicts; reusing one dict for a second dataset silently uses the
      first dataset's Boundary_knots
