@@ -30,8 +30,11 @@ Theme N1f  MVMeta keeps views of the caller's arrays; parameter order of _par2Ps
                   the code, so the docstring test below passes either way, while the R-order test asserts the
                   documented R parametrisation (delete it if the docstring is changed instead).
 
-Tests decorated with @known_defect assert the R-faithful (or documented-correct) behaviour and fail today (strict
-xfail); the plain tests guard neighbouring behaviour that is already faithful and must keep passing while the fixes land.
+Status: every finding of this module is fixed (no test is marked as a known defect any more). N1d: control is
+validated like mvmeta.control, Scor / initPsi / reltol / optim / hessian are honoured, inputna and unsupported optim
+entries are refused by name. N1e: BFGS restarts from its exit point. N1f: the model owns copies of y / S / X, and the
+parameter-order finding (mvmeta-est-10) is resolved by documenting the row-major order plus a conversion helper.
+The plain tests guard neighbouring behaviour that was already faithful and must keep passing.
 
 Notes for whoever fixes these
   * "Honoured or rejected": for initPsi / reltol / optim / hessian / Scor-as-a-vector the tests accept either an
@@ -48,7 +51,7 @@ import warnings
 import numpy as np
 import pytest
 
-from rhelpers import assert_close, known_defect, max_rel_diff, np2r, r, r2np
+from rhelpers import assert_close, max_rel_diff, np2r, r, r2np
 
 NAMES = 'mmo_'          # prefix of every object this module creates in R's global environment
 
@@ -304,7 +307,6 @@ def random_chol_factor(k, seed):
 # ==============================================================================================================
 # N1d  mvmeta-est-6 / mvmeta-blup-7: unknown control keys, igls.iter < 1
 # ==============================================================================================================
-@known_defect('N1d', 'mvmeta-est-6', 'mvmeta-blup-7', note='control is a free dict; unknown keys are accepted silently')
 @pytest.mark.parametrize('key', ['bogus', 'checkPD', 'addSlist'])
 def test_unknown_control_key_raises_like_r(key):
     """R: mvmeta.control() has no such argument -> error "unused argument".  (checkPD / addSlist belong to
@@ -323,7 +325,6 @@ def test_unknown_control_key_raises_like_r(key):
     assert key in str(exc.value), f'the error should name the offending key {key!r}: {exc.value!r}'
 
 
-@known_defect('N1d', 'mvmeta-est-6', note="igls.iter < 1 is accepted; R: \"'igls.iter' in the control list must be positive\"")
 @pytest.mark.parametrize('n_iter', [0, -1])
 def test_igls_iter_must_be_positive_like_r(n_iter):
     y, V, X = sim_var(30, 3, 2, 0.3, 5)
@@ -342,7 +343,6 @@ SCOR_CASES = [((30, 3, 2, 5), 0.6), ((40, 3, 1, 11), 0.5), ((30, 3, 2, 5), -0.2)
 SCOR_IDS = ['n30k3p2-0.6', 'n40k3p1-0.5', 'n30k3p2--0.2']
 
 
-@known_defect('N1d', 'mvmeta-est-6', 'mvmeta-blup-7', note='Scor is ignored: the (n,k) S is always expanded with np.diag')
 @pytest.mark.parametrize('cfg,scor', SCOR_CASES, ids=SCOR_IDS)
 def test_scor_with_variance_only_S_matches_r_fit(cfg, scor):
     """R: a k-column S is expanded by inputcov(sqrt(S), Scor): off-diagonals Scor * sqrt(v_i v_j).  Psi, coefficients,
@@ -356,7 +356,6 @@ def test_scor_with_variance_only_S_matches_r_fit(cfg, scor):
     assert_fit_close(m, rs, rtol=1e-6, what=f'Scor={scor}')
 
 
-@known_defect('N1d', 'mvmeta-est-6', 'mvmeta-blup-7', note='Scor is ignored; engine itself is fine with an explicit S')
 @pytest.mark.parametrize('scor', [0.6, -0.3])
 def test_scor_equals_explicit_within_study_correlation_matrices(scor):
     """Optimiser-independent check of the expansion: Scor with variances must be the same model as passing the
@@ -378,7 +377,6 @@ def test_scor_equals_explicit_within_study_correlation_matrices(scor):
     assert_close(bv, bv_ref, rtol=1e-8, what='BLUP vcov')
 
 
-@known_defect('N1d', 'mvmeta-blup-7', 'mvmeta-est-6', note='blup() re-applies Scor in R; PyDLNM BLUPs use the Scor=0 S')
 def test_scor_blup_matches_r():
     """blup.mvmeta re-expands S with inputcov(sqrt(S), object$control$Scor), so the BLUPs and their vcov inherit Scor."""
     n, k, p = 30, 3, 2
@@ -392,7 +390,6 @@ def test_scor_blup_matches_r():
     assert_close(bv, rb['bvcov'], rtol=1e-5, what='BLUP vcov')
 
 
-@known_defect('N1d', 'mvmeta-est-6', 'mvmeta-blup-7', note='vector-valued Scor is ignored')
 @pytest.mark.parametrize('which', ['per_pair', 'per_study'])
 def test_vector_scor_matches_r_or_is_rejected(which):
     """R's inputcov accepts length k(k-1)/2 (one correlation per outcome pair, lower triangle column-wise) or length n
@@ -411,7 +408,6 @@ def test_vector_scor_matches_r_or_is_rejected(which):
     assert_fit_close(m, rs, rtol=1e-6, what=f'Scor {which}')
 
 
-@known_defect('N1d', 'mvmeta-est-6', note='|Scor| > 1 is not noticed; R: inputcov "correlations must be between -1 and 1"')
 @pytest.mark.parametrize('scor', [1.5, -1.01])
 def test_scor_outside_minus_one_one_raises_like_r(scor):
     y, V, X = sim_var(30, 3, 2, 0.3, 5)
@@ -455,7 +451,6 @@ def test_scor_is_irrelevant_when_a_full_S_is_given(scor):
 # ==============================================================================================================
 # N1d  mvmeta-est-6: initPsi / reltol / optim / hessian must be honoured or rejected
 # ==============================================================================================================
-@known_defect('N1d', 'mvmeta-est-6', note='initPsi is ignored (R: it is the optimiser start in place of the IGLS value)')
 def test_initpsi_is_honoured_or_rejected():
     """One BFGS iteration from R's own optimum stays at the optimum; from the IGLS start it does not.  If initPsi is
     honoured the first must hold; otherwise PyDLNM has to refuse the option."""
@@ -471,7 +466,6 @@ def test_initpsi_is_honoured_or_rejected():
     assert m.loglik >= ref['loglik'] - 1e-6 * abs(ref['loglik'])
 
 
-@known_defect('N1d', 'mvmeta-est-6', note='reltol / optim are ignored (R: they set the optim stopping rule)')
 @pytest.mark.parametrize('key,py_control,r_control', [
     ('reltol', {'reltol': 0.1}, 'list(reltol=0.1)'),
     ('optim', {'optim': {'reltol': 0.1}}, 'list(optim=list(reltol=0.1))'),
@@ -490,7 +484,6 @@ def test_stopping_rule_options_are_honoured_or_rejected(key, py_control, r_contr
     assert not np.array_equal(m.psi, base.psi), f'control {py_control} has no effect: Psi is bit-identical to the default fit'
 
 
-@known_defect('N1d', 'mvmeta-est-6', note='hessian=True adds no Hessian (R: fit$hessian, npar x npar)')
 def test_hessian_option_returns_a_hessian_or_is_rejected():
     y, V, X = sim_var(30, 3, 2, 0.3, 5)
     r_fit(y, V, X, control=r_ctrl(hessian='TRUE'))                  # pushes the inputs into R and fits with hessian=TRUE
@@ -544,13 +537,105 @@ def test_fit_matches_r_with_identical_control(cfg):
     assert m.loglik >= ref['loglik'] - 1e-8 * abs(ref['loglik']), 'PyDLNM must not stop at a worse optimum'
 
 
+# --------------------------------------------------------------------------------------------------------------
+# Added with the fixes: the control options that are honoured, and the ones that are refused by name
+# --------------------------------------------------------------------------------------------------------------
+def test_hessian_equals_rs_fit_hessian_at_the_optimum():
+    """hessian=True: PyDLNM returns R's fit$hessian (Hessian of the log-likelihood in R's parameter order, central
+    differences of the gradient with ndeps = 1e-3); at the same optimum the two agree to the optimum's accuracy."""
+    y, V, X = sim_var(30, 3, 2, 0.3, 5)
+    r_fit(y, V, X, control=r_ctrl(hessian='TRUE'))
+    ref_h = r2np(r(f'{NAMES}fit$hessian'))
+    m, _ = py_fit(y, V, X, control={'hessian': True, 'reltol': 1e-14})
+    assert m.hessian.shape == (6, 6) and np.allclose(m.hessian, m.hessian.T)
+    assert_close(m.hessian, ref_h, rtol=1e-6, what='Hessian')
+    assert np.all(np.linalg.eigvalsh(m.hessian) < 0), 'a log-likelihood Hessian is negative definite at the maximum'
+    m0, _ = py_fit(y, V, X)
+    assert m0.hessian is None
+
+
+def test_inputna_and_unsupported_optim_entries_are_refused_by_name():
+    from meta_analysis import MVMeta
+    y, V, X = sim_var(30, 3, 2, 0.3, 5)
+    with pytest.raises(NotImplementedError, match='inputna'):
+        MVMeta(control={'inputna': True}).fit(y, V, X)
+    for key in ('fnscale', 'parscale', 'abstol'):
+        with pytest.raises(NotImplementedError, match=key):
+            MVMeta(control={'optim': {key: 1}}).fit(y, V, X)
+    with pytest.raises(ValueError, match='maxit|maximum number'):
+        MVMeta(control={'maxiter': 0}).fit(y, V, X)
+    with pytest.raises(TypeError, match='control'):
+        MVMeta(control=['maxiter', 5])
+
+
+@pytest.mark.parametrize('method', ['reml', 'ml', 'fixed', 'mm', 'vc', 'foo', 'REML', 'Ml', ''])
+def test_method_names_are_validated_when_the_model_is_built_and_when_it_is_fitted(method):
+    from meta_analysis import MVMeta, METHODS
+    y, S, X = sim(30, 2, 2, 0.4, 5)
+    if method in METHODS:
+        assert MVMeta(method=method).fit(y, S, X).method == method
+        return
+    with pytest.raises(ValueError, match='case-sensitive'):
+        MVMeta(method=method)
+    mv = MVMeta()
+    mv.method = method                                   # changed after construction: fit() checks again
+    with pytest.raises(ValueError, match='case-sensitive'):
+        mv.fit(y, S, X)
+
+
+def test_optim_maxit_overrides_maxiter_and_optim_reltol_overrides_reltol_like_r():
+    """R: optim <- modifyList(list(maxit = maxiter, reltol = reltol), optim)."""
+    y, V, X = sim_var(30, 3, 2, 0.3, 5)
+    m, msgs = py_fit(y, V, X, control={'maxiter': 500, 'optim': {'maxit': 1}})
+    assert not m.converged and any('iteration' in s.lower() for s in msgs), msgs
+    a, _ = py_fit(y, V, X, control={'reltol': 1e-3, 'optim': {'reltol': 0.1}})
+    b, _ = py_fit(y, V, X, control={'optim': {'reltol': 0.1}})
+    assert np.array_equal(a.psi, b.psi)
+    assert a.converged                                   # R: convergence 0 when the relative change is below reltol
+
+
+def test_psifix_and_psicor_are_accepted_and_ignored_like_r_for_an_unstructured_psi():
+    """R reads Psifix / Psicor only for bscov in prop / fixed / cor; for 'unstr' they change nothing (R and PyDLNM)."""
+    y, V, X = sim_var(30, 3, 2, 0.3, 5)
+    ref = r_fit(y, V, X)
+    ref2 = r_fit(y, V, X, control=r_ctrl(Psicor='0.3', Psifix='diag(3)'))
+    assert_close(ref2['psi'], ref['psi'], rtol=1e-12, what='R: Psifix / Psicor are inert for unstr')
+    m, _ = py_fit(y, V, X, control={'Psicor': 0.3, 'Psifix': np.eye(3)})
+    m0, _ = py_fit(y, V, X)
+    assert np.array_equal(m.psi, m0.psi)
+
+
+def test_initpsi_accepts_r_vech_vectors_and_rejects_bad_shapes():
+    y, V, X = sim_var(30, 3, 2, 0.3, 5)
+    ref = r_fit(y, V, X)
+    psi = ref['psi']
+    vech = np.array([psi[a, b] for b in range(3) for a in range(b, 3)])          # R's vechMat order
+    m_vec, _ = py_fit(y, V, X, control={'initPsi': vech, 'maxiter': 1})
+    m_mat, _ = py_fit(y, V, X, control={'initPsi': psi, 'maxiter': 1})
+    assert_close(m_vec.psi, m_mat.psi, rtol=1e-12, what='initPsi as vech vector vs matrix')
+    for bad in (np.ones(5), np.eye(2), -np.eye(3)):
+        with pytest.raises(ValueError, match='initPsi'):
+            py_fit(y, V, X, control={'initPsi': bad})
+
+
+def test_converged_fits_are_silent_and_a_failed_fit_still_reports_its_results():
+    """The converged flag follows R's relative-objective-change criterion: a normal fit is converged without a warning;
+    stopping at maxiter is reported (flag and warning) but coefficients / Psi / logLik are still those of the last
+    iterate, so callers are never left without results."""
+    y, S, X = sim(30, 2, 2, 0.4, 5)
+    m, msgs = py_fit(y, S, X)
+    assert m.converged is True and not [s for s in msgs if 'converge' in s.lower()]
+    m1, msgs1 = py_fit(y, S, X, control={'maxiter': 1})
+    assert m1.converged is False and any('iteration' in s.lower() for s in msgs1)
+    assert np.isfinite(m1.loglik) and m1.psi.shape == (2, 2) and m1.coefficients.shape == (2, 2)
+
+
 # ==============================================================================================================
 # N1e  mvmeta-est-8: BFGS abort on extremely ill-conditioned within-study covariances
 # ==============================================================================================================
 ILL_SEEDS = [7, 11, 501]
 
 
-@known_defect('N1e', 'mvmeta-est-8', note="scipy BFGS exits with 'precision loss' ~20 iterations from the IGLS start")
 @pytest.mark.parametrize('seed', ILL_SEEDS)
 def test_extremely_ill_conditioned_S_reaches_r_optimum(seed):
     """k=5, n=40, corr 0.999, SD ratio 0.03, tau=0 (Psi on the boundary): median cond(S_i) ~ 1e15.  R's optim BFGS
@@ -602,7 +687,6 @@ def _assert_blup_unchanged(m, before, what):
     assert np.array_equal(v1, v0), f'{what}: BLUP vcov changed by up to {np.abs(v1 - v0).max():.3g}'
 
 
-@known_defect('N1f', 'mvmeta-est-9', 'mvmeta-blup-10', note='self.y is the caller array; blup() reads it at call time')
 @pytest.mark.parametrize('entry', ['MVMeta', 'mvmeta'])
 @pytest.mark.parametrize('edit', ['scale', 'zero'])
 def test_inplace_edit_of_y_after_fit_does_not_change_blup(entry, edit):
@@ -619,7 +703,6 @@ def test_inplace_edit_of_y_after_fit_does_not_change_blup(entry, edit):
     _assert_blup_unchanged(m, before, f'{entry}: y edited in place ({edit})')
 
 
-@known_defect('N1f', 'mvmeta-est-9', note='self.S is the caller array; blup() reads it (BLUP and BLUP vcov change)')
 def test_inplace_edit_of_S_after_fit_does_not_change_blup():
     y, S, X = sim(30, 2, 2, 0.4, 5)
     m = _fit('MVMeta', y, S, X)
@@ -628,7 +711,6 @@ def test_inplace_edit_of_S_after_fit_does_not_change_blup():
     _assert_blup_unchanged(m, before, 'S edited in place')
 
 
-@known_defect('N1f', 'mvmeta-est-9', note='self.X aliases the caller array (inert for blup today, but the model keeps it)')
 def test_inplace_edit_of_X_after_fit_keeps_the_model_design():
     y, S, X = sim(30, 2, 2, 0.4, 5)
     X0 = X.copy()
@@ -646,7 +728,6 @@ def test_inplace_edit_of_X_after_fit_does_not_change_blup():
     _assert_blup_unchanged(m, before, 'X edited in place')
 
 
-@known_defect('N1f', 'mvmeta-est-9', 'mvmeta-blup-10', note='np.asarray(dtype=float) returns the caller buffer')
 @pytest.mark.parametrize('name', ['y', 'S', 'X'])
 def test_model_does_not_share_memory_with_the_callers_arrays(name):
     y, S, X = sim(30, 2, 2, 0.4, 5)
@@ -658,7 +739,6 @@ def test_model_does_not_share_memory_with_the_callers_arrays(name):
         assert not any(np.shares_memory(row, caller) for row in per_study), f'model._{name}list is a view of the caller array'
 
 
-@known_defect('N1f', 'mvmeta-blup-10', 'mvmeta-est-9', note='refitting into one preallocated buffer (common in loops)')
 def test_fits_from_one_reused_buffer_stay_independent():
     """Three datasets written one after another into the same preallocated arrays; each model's BLUPs, taken right
     after its own fit, must still be the same when asked for after the loop (and equal those of a fresh fit)."""
@@ -717,33 +797,28 @@ def test_non_float64_inputs_are_already_decoupled_from_the_caller(kind):
 # ==============================================================================================================
 # N1f  mvmeta-est-10: parameter order of _par2Psi / _Psi2par
 # ==============================================================================================================
-@known_defect('N1f', 'mvmeta-est-10',
-              note="np.tril_indices fills the Cholesky factor row-major; R's lower.tri(diag=TRUE) fills column-major")
 @pytest.mark.parametrize('k', [3, 4, 5])
-def test_par_vector_uses_rs_column_major_lower_triangle_order(k):
-    """par -> Psi -> par round trip through R: R's par2Psi(par) is PyDLNM's _par2Psi(par), and PyDLNM's _Psi2par(Psi)
-    returns R's own initpar vechMat(t(chol(Psi))) -- i.e. parameters could be exchanged with R.  If the decision is to
-    only correct the docstring (verifier's preferred fix), this test skips itself once the docstring names the
-    row-major order, and test_par_vector_docstring_states_the_order_it_implements carries the guard."""
+def test_par_vector_is_a_documented_permutation_of_rs_column_major_order(k):
+    """mvmeta-est-10, resolved by documenting PyDLNM's own (row-major, np.tril_indices) order: the parameters are a fixed
+    permutation of R's lower.tri(diag = TRUE) column-major order, and _par_to_R_order() converts. Through R: R's
+    par2Psi(R-ordered par) is PyDLNM's _par2Psi(par) for the same Cholesky factor, and _par_to_R_order(_Psi2par(Psi))
+    is R's own initpar vechMat(t(chol(Psi))) -- i.e. parameter vectors can be exchanged with R (Hessian included)."""
     import meta_analysis as ma
-    doc = (ma._par2Psi.__doc__ or '').lower()
-    if ('row-major' in doc or 'row major' in doc) and not np.allclose(ma._par2Psi(np.arange(1.0, 7.0), 3),
-                                                                      r_par2psi(np.arange(1.0, 7.0), 3)):
-        pytest.skip("finding resolved by the docstring-only fix: the row-major order is documented as PyDLNM's own")
     L = random_chol_factor(k, seed=40 + k)
-    par_r = r_par(L)
+    par_r = r_par(L)                                                 # R's order
+    par_py = L[np.tril_indices(k)]                                   # PyDLNM's order
     psi_r = r_par2psi(par_r, k)
-    np.testing.assert_allclose(psi_r, L @ L.T, rtol=1e-13, atol=1e-13)          # R documents: lower.tri filled column-wise
+    np.testing.assert_allclose(psi_r, L @ L.T, rtol=1e-13, atol=1e-13)          # R: lower.tri filled column-wise
     np.testing.assert_allclose(r_psi2par(psi_r), par_r, rtol=1e-10, atol=1e-12)
-    assert_close(ma._par2Psi(par_r, k), psi_r, rtol=1e-12, what=f'k={k}: _par2Psi(par) vs R par2Psi(par)')
-    assert_close(ma._Psi2par(psi_r), par_r, rtol=1e-10, what=f'k={k}: _Psi2par(Psi) vs R vechMat(t(chol(Psi)))')
-    np.testing.assert_allclose(ma._Psi2par(ma._par2Psi(par_r, k)), par_r, rtol=1e-10, atol=1e-12)
-    # the literal example of the finding: par = 1..6, k = 3
-    p6 = np.arange(1.0, 7.0)
-    assert_close(ma._par2Psi(p6, 3), r_par2psi(p6, 3), rtol=1e-12, what='par = 1..6, k = 3')
+    assert_close(ma._par2Psi(par_py, k), psi_r, rtol=1e-12, what=f'k={k}: _par2Psi(par) vs R par2Psi(par)')
+    assert_close(ma._par_to_R_order(ma._Psi2par(psi_r), k), par_r, rtol=1e-10,
+                 what=f'k={k}: _par_to_R_order(_Psi2par(Psi)) vs R vechMat(t(chol(Psi)))')
+    assert_close(ma._par_to_R_order(par_py, k), par_r, rtol=1e-14, what='permutation')
+    # the literal example of the finding: R's par = 1..6, k = 3 is PyDLNM's par = [1, 2, 4, 3, 5, 6]
+    assert_close(ma._par2Psi(np.array([1.0, 2.0, 4.0, 3.0, 5.0, 6.0]), 3), r_par2psi(np.arange(1.0, 7.0), 3), rtol=1e-12,
+                 what='par = 1..6, k = 3')
 
 
-@known_defect('N1f', 'mvmeta-est-10', note='docstring says column-major like R, the code is row-major')
 def test_par_vector_docstring_states_the_order_it_implements():
     """Passes after EITHER fix: the docstring of _par2Psi may claim R's column-major order only if the function does
     that, and otherwise has to name the order it really uses (row-major, np.tril_indices)."""
