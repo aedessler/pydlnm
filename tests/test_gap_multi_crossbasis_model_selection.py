@@ -19,30 +19,29 @@ Three statsmodels designs are used, because the coefficient names are what the s
 and four two-basis layouts (6+2 columns with temperature first, 4+6 with o3 first, 10+10 with equal size, 6+1 with a
 one-column second basis), plus a two-one-basis model (ns(temp) and ns(humidity), kind 'one').
 
-Findings (tests marked known_defect assert R's behaviour and fail today, strict xfail; plain tests guard what is
-faithful today, including the loud failure, and must keep passing while the defects are fixed):
+Findings (all fixed; every test below is an ordinary test, and the tests that used to be strict xfails assert
+R's behaviour):
 
   MB1  crosspred / CrossPred, crossreduce (overall, var, lag), attrdl and find_mmt with model= on a model holding two
-       cross-bases (or two one-bases) raise ValueError('... pass coef= and vcov= ...') for every design and every basis,
-       although R returns the block of the basis passed; there is no name=/prefix=/columns= argument and nothing in
-       the CrossBasis carries a name.  (Loud, and the coef=/vcov= workaround reproduces R exactly: plain tests.)
-  MB2  (silent wrong numbers) an ImprovedGLMInterface / Rpy2GLMInterface fitted with a second cross-basis among
-       other_vars exposes only the block of ITS cross-basis; crosspred(cb2, model=interface) takes that block as the
+       cross-bases (or two one-bases) used to raise ValueError('... pass coef= and vcov= ...') for every design and
+       every basis, although R returns the block of the basis passed.
+  MB2  (was: silent wrong numbers) an ImprovedGLMInterface / Rpy2GLMInterface fitted with a second cross-basis among
+       other_vars exposed only the block of ITS cross-basis; crosspred(cb2, model=interface) took that block as the
        coefficients of cb2 whenever the two bases have the same number of columns (R: the block of cb2).
-  MB3  (silent wrong numbers) a model that holds only the block of basis A is accepted for basis B of the same size when
-       its columns carry v#.l# names; R stops ('coef/vcov not consistent with basis matrix') because the name of B
-       is not in the model.  Nothing ties the selected block to the basis passed.
+  MB3  (was: silent wrong numbers) a model that holds only the block of basis A was accepted for basis B of the same
+       size when its columns carry v#.l# names; R stops ('coef/vcov not consistent with basis matrix') because the
+       name of B is not in the model.
   MB4  a ONE-column cross-basis (lin x the default strata(df=1) lag basis) is named by the object alone in R's model
-       ('cb', not 'cbv1.l1'); R's `cond <- name` branch finds it, PyDLNM only knows the v#.l# / b# patterns.
+       ('cb', not 'cbv1.l1'); R's `cond <- name` branch finds it, PyDLNM only knew the v#.l# / b# patterns.
 
-The same two facts make all of these work (the scratch fix used to validate the expected values here matches the basis
-columns against the design matrix of the fitted model when it exposes one, statsmodels `model.exog`, and otherwise
-keeps the name pattern): the model carries the basis columns, so the block can be identified without a name.  If the
-library instead grows an explicit name=/prefix= argument, the known_defect tests have to be adapted to pass it.
+The fix (model_utils.locate_block): R's name is not visible to Python, so the block of the basis passed is identified
+by, in this order, an explicit `name=` prefix (or the `name` attribute of the basis), the columns of the basis in the
+design matrix of the model (statsmodels `model.exog`, the R model of a PyDLNM GLM interface), and the coefficient
+names v#.l# / b#. The model carries the basis columns, so no name is needed, and a basis that is not in the model is
+rejected. The `name=` route is covered at the end of this module.
 
-The neighbouring behaviour that is faithful (block by name in a model with one cross-basis, a cross-basis next to a
-one-basis, explicit coef=/vcov= slices, the loud ValueError for the multi-basis model, the one_col layout's temperature
-block) is covered by plain tests.
+The neighbouring behaviour (block by name in a model with one cross-basis, a cross-basis next to a one-basis, explicit
+coef=/vcov= slices, the coef=/vcov= advice of the ValueError) is covered by the same tests.
 """
 import contextlib
 import copy
@@ -52,7 +51,7 @@ import warnings
 import numpy as np
 import pytest
 
-from rhelpers import REPO, assert_close, known_defect, np2r, r, rget
+from rhelpers import REPO, assert_close, np2r, r, rget
 
 RTOL = 1e-8                      # statsmodels vs R IRLS on an identical design (both converged to ~1e-10)
 N_ROWS = 2500                    # first 2500 days of chicagoNMMAPS
@@ -348,24 +347,13 @@ ONE_CASES = [('one_one', d, b) for d in DESIGNS for b in BASES]
 ONE_IDS = [f'{cfg}-{d}-{b}' for cfg, d, b in ONE_CASES]
 ALL_CASES = CB_CASES + ONE_CASES
 ALL_IDS = CB_IDS + ONE_IDS
-# The only two-basis configuration that works today: R names a ONE-column basis by the object name alone (no v#.l#
-# suffix), so in the one_col layout the 6-column temperature block is the only set of coefficients that looks like a
-# cross-basis and is found by pattern (the o3 block, one column, is not findable: MB4).
-WORKS_TODAY = [('one_col', 'dataframe', 't')]
-FAILS_CB = [cs for cs in CB_CASES if cs not in WORKS_TODAY]
-FAILS_CB_IDS = [i for cs, i in zip(CB_CASES, CB_IDS) if cs not in WORKS_TODAY]
-FAILS_ALL = [cs for cs in ALL_CASES if cs not in WORKS_TODAY]
-FAILS_ALL_IDS = [i for cs, i in zip(ALL_CASES, ALL_IDS) if cs not in WORKS_TODAY]
-
-
 # ==============================================================================================================
 # MB1: model= on a model with two bases: R returns the block of the basis passed
 # ==============================================================================================================
-@known_defect('GAP', 'multi_crossbasis_model_selection', note='MB1: model= with two bases raises ValueError; R selects by name')
-@pytest.mark.parametrize('cfg,design,tag', FAILS_ALL, ids=FAILS_ALL_IDS)
+@pytest.mark.parametrize('cfg,design,tag', ALL_CASES, ids=ALL_IDS)
 def test_crosspred_model_route_two_bases_matches_R(cfg, design, tag):
     """R: crosspred(cb.temp, model) and crosspred(cb.o3, model) on glm(death ~ cb.temp + cb.o3 + ...): every
-    field of the prediction.  PyDLNM: ValueError 'pass coef= and vcov=' for every design and both bases."""
+    field of the prediction, for every design (named columns, plain ndarray, patsy matrix terms) and both bases."""
     c = _case(cfg)
     res = _fit(c, design)
     ref = r_crosspred(c, tag)
@@ -373,8 +361,7 @@ def test_crosspred_model_route_two_bases_matches_R(cfg, design, tag):
     _assert_pred_equals(pp, ref, f'crosspred(model=) {cfg}/{design}/{tag}')
 
 
-@known_defect('GAP', 'multi_crossbasis_model_selection', note='MB1: crossreduce(model=) with two bases')
-@pytest.mark.parametrize('cfg,design,tag', FAILS_CB, ids=FAILS_CB_IDS)
+@pytest.mark.parametrize('cfg,design,tag', CB_CASES, ids=CB_IDS)
 def test_crossreduce_model_route_two_crossbases_overall_matches_R(cfg, design, tag):
     c = _case(cfg)
     res = _fit(c, design)
@@ -383,7 +370,6 @@ def test_crossreduce_model_route_two_crossbases_overall_matches_R(cfg, design, t
     _assert_red_equals(red, ref, f'crossreduce(model=) overall {cfg}/{design}/{tag}')
 
 
-@known_defect('GAP', 'multi_crossbasis_model_selection', note='MB1: crossreduce(type=var/lag, model=) with two bases')
 @pytest.mark.parametrize('design', DESIGNS)
 @pytest.mark.parametrize('type_', ['var', 'lag'])
 @pytest.mark.parametrize('tag', BASES)
@@ -396,8 +382,7 @@ def test_crossreduce_model_route_two_crossbases_var_lag_matches_R(design, type_,
     _assert_red_equals(red, ref, f'crossreduce(model=) {type_} {design}/{tag}')
 
 
-@known_defect('GAP', 'multi_crossbasis_model_selection', note='MB1: attrdl(model=) with two bases')
-@pytest.mark.parametrize('cfg,design,tag', FAILS_CB, ids=FAILS_CB_IDS)
+@pytest.mark.parametrize('cfg,design,tag', CB_CASES, ids=CB_IDS)
 def test_attrdl_model_route_two_crossbases_matches_R(cfg, design, tag):
     """attrdl(x, cb, cases, model=): per-observation forward AF and the backward total AN, both bases."""
     c = _case(cfg)
@@ -408,31 +393,15 @@ def test_attrdl_model_route_two_crossbases_matches_R(cfg, design, tag):
         _assert_attr_equals(py, ref, f'attrdl(model=) {mode} {cfg}/{design}/{tag}')
 
 
-@known_defect('GAP', 'multi_crossbasis_model_selection', note='MB1: find_mmt(model=) with two bases')
-@pytest.mark.parametrize('cfg,design,tag', FAILS_CB, ids=FAILS_CB_IDS)
+@pytest.mark.parametrize('cfg,design,tag', CB_CASES, ids=CB_IDS)
 def test_find_mmt_model_route_two_crossbases_matches_R(cfg, design, tag):
     c = _case(cfg)
     res = _fit(c, design)
     assert py_mmt(c, tag, model=res) == r_mmt(c, tag)
 
 
-def test_two_basis_model_route_works_when_the_other_basis_has_one_column():
-    """PLAIN: one_col layout, pandas design named as R names it: the 6-column temperature block is the only set of
-    v#.l# coefficients (the one-column o3 block is named by the object alone), so every model-route entry point finds
-    it and equals R."""
-    cfg, design, tag = WORKS_TODAY[0]
-    c = _case(cfg)
-    res = _fit(c, design)
-    _assert_pred_equals(py_crosspred(c, tag, model=res), r_crosspred(c, tag), 'crosspred(model=)')
-    _assert_red_equals(py_crossreduce(c, tag, 'overall', None, model=res), r_crossreduce(c, tag, 'overall', None),
-                       'crossreduce(model=)')
-    for mode in ATTR_MODES:
-        _assert_attr_equals(py_attrdl(c, tag, mode, model=res), r_attrdl(c, tag, mode), f'attrdl(model=) {mode}')
-    assert py_mmt(c, tag, model=res) == r_mmt(c, tag)
-
-
 # ==============================================================================================================
-# loud failure: never a silent wrong number for a multi-basis model (plain: holds before and after a fix)
+# never a silent wrong number for a multi-basis model: R's numbers, or a ValueError with the coef=/vcov= advice
 # ==============================================================================================================
 def _model_route_calls(c, tag, res):
     """(label, callable) per entry point on the model route: the callable runs Python with model= and asserts that
@@ -461,7 +430,8 @@ def _model_route_calls(c, tag, res):
 @pytest.mark.parametrize('cfg,design,tag', ALL_CASES, ids=ALL_IDS)
 def test_two_basis_model_route_gives_R_numbers_or_a_clear_ValueError(cfg, design, tag):
     """Whatever the design, crosspred / crossreduce / attrdl / find_mmt on a two-basis model either return R's numbers
-    for the block of the basis passed or raise the ValueError that asks for coef=/vcov= -- never other numbers."""
+    for the block of the basis passed or raise the ValueError that asks for coef=/vcov= -- never other numbers (the
+    equality with R is the subject of the tests above; this one keeps the contract for any future design)."""
     c = _case(cfg)
     res = _fit(c, design)
     for label, call in _model_route_calls(c, tag, res):
@@ -523,12 +493,10 @@ def test_single_basis_dataframe_model_route_matches_R(cfg, tag):
         assert py_mmt(c, tag, model=res) == r_mmt(c, tag)
 
 
-@known_defect('GAP', 'multi_crossbasis_model_selection',
-              note='MB4: a one-column basis is named by the object alone in R (cond <- name); no v#.l# name to find')
 def test_single_column_basis_model_route_matches_R():
     """MB4: glm(death ~ cb + dow + ns(time)) with a ONE-column cross-basis (lin x strata(df=1), the default arglag):
-    R's coefficient is named 'cb' and crosspred / crossreduce / attrdl use `cond <- name`.  PyDLNM only knows
-    v#.l# / b# names, so the model route raises even with R's own column names."""
+    R's coefficient is named 'cb' and crosspred / crossreduce / attrdl use `cond <- name`.  PyDLNM has no v#.l# / b#
+    name to look for, and finds the column among the design columns of the model."""
     c = _case('one_col', terms=('o',))
     res = _fit(c, 'dataframe')
     assert c.names[c.idx['o'][0]] == c.rn['o'], 'R names a one-column basis by the object alone'
@@ -618,18 +586,11 @@ def _check_model_without_the_basis_passed(cfg, design):
         py_crossreduce(c2, 'o', 'overall', None, model=res)
 
 
-@known_defect('GAP', 'multi_crossbasis_model_selection',
-              note='MB3: the equal-size block of another basis is accepted when the columns are named v#.l#')
-def test_model_without_the_basis_passed_equal_size_named_block_is_rejected_like_R():
-    """10+10 layout, pandas design with R's column names: PyDLNM takes the temperature block for the o3 basis
-    (same number of columns, names match v#.l#) and predicts o3 with temperature's coefficients; R stops."""
-    _check_model_without_the_basis_passed('ten_ten', 'dataframe')
-
-
-@pytest.mark.parametrize('cfg,design', [(cfg, d) for cfg in ('ten_ten', 'six_two', 'rev_four_six') for d in DESIGNS
-                                        if (cfg, d) != ('ten_ten', 'dataframe')])
+@pytest.mark.parametrize('cfg,design', [(cfg, d) for cfg in ('ten_ten', 'six_two', 'rev_four_six') for d in DESIGNS])
 def test_model_without_the_basis_passed_is_rejected_like_R(cfg, design):
-    """PLAIN: the other layouts are refused today (different block size, or no v#.l# names in the model)."""
+    """The model holds the temperature block only: the o3 basis is refused for every design.  The 10+10 layout with
+    R's own column names is the dangerous one (the temperature block has the size and the v#.l# names of o3's: it was
+    used to predict o3 with temperature's coefficients); the other layouts differ in size or carry no names."""
     _check_model_without_the_basis_passed(cfg, design)
 
 
@@ -676,29 +637,22 @@ def test_interface_first_crossbasis_matches_R():
     _assert_pred_equals(pp, ref, 'crosspred(cb_t, model=interface)')
 
 
-@known_defect('GAP', 'multi_crossbasis_model_selection',
-              note='MB2: interface block of the FIRST cross-basis is used for a second cross-basis of the same size')
-def test_interface_second_crossbasis_crosspred_never_silently_wrong():
+def test_interface_second_crossbasis_crosspred_matches_R():
     """The interface holds cb_t (own block) and cb_o (in other_vars).  R: crosspred(ifo, model) = the cb_o block.
-    PyDLNM: same number of columns, so crosspred(cb_o, model=interface) silently predicts cb_o with the coefficients
-    of cb_t.  Acceptable: R's numbers or a ValueError; not other numbers."""
+    The two bases have the same number of columns: crosspred(cb_o, model=interface) used to predict cb_o with the
+    coefficients of cb_t (silently wrong numbers); the block of cb_o is now found among the columns of the R model."""
     from prediction import crosspred
     s = _iface_case()
     c, iface = s['c'], s['iface']
     _push(c, 'o')
     r(f'{SP}_pIo <- local({{ ifo <- {c.rn["o"]}; crosspred(ifo, {SP}_ifit, at={SP}_at, cen={SP}_cen, cumul=TRUE) }})')
     ref = {f: rget(f'unname({SP}_pIo${f})') for f in PRED_FIELDS_CB}
-    try:
-        with _quiet():
-            pp = crosspred(c.py['o'], model=iface, at=c.at['o'], cen=c.cen['o'], cumul=True)
-    except ValueError:
-        return
+    with _quiet():
+        pp = crosspred(c.py['o'], model=iface, at=c.at['o'], cen=c.cen['o'], cumul=True)
     _assert_pred_equals(pp, ref, 'crosspred(cb_o, model=interface)')
 
 
-@known_defect('GAP', 'multi_crossbasis_model_selection',
-              note='MB2: interface block of the FIRST cross-basis is used for a second cross-basis of the same size')
-def test_interface_second_crossbasis_crossreduce_never_silently_wrong():
+def test_interface_second_crossbasis_crossreduce_matches_R():
     from crossreduce import crossreduce
     s = _iface_case()
     c, iface = s['c'], s['iface']
@@ -707,11 +661,8 @@ def test_interface_second_crossbasis_crossreduce_never_silently_wrong():
       f'crossreduce(ifo, {SP}_ifit, type="overall", at={SP}_at, cen={SP}_cen) }})')
     ref = dict(coef=rget(f'unname({SP}_rIo$coefficients)'), vcov=rget(f'unname({SP}_rIo$vcov)'),
                fit=rget(f'unname({SP}_rIo$fit)'), se=rget(f'unname({SP}_rIo$se)'))
-    try:
-        with _quiet():
-            red = crossreduce(c.py['o'], model=iface, type='overall', at=c.at['o'], cen=c.cen['o'])
-    except ValueError:
-        return
+    with _quiet():
+        red = crossreduce(c.py['o'], model=iface, type='overall', at=c.at['o'], cen=c.cen['o'])
     _assert_red_equals(red, ref, 'crossreduce(cb_o, model=interface)')
 
 
@@ -730,3 +681,154 @@ def test_interface_second_crossbasis_block_by_hand_matches_R():
     with _quiet():
         pp = crosspred(c.py['o'], coef=coef, vcov=vcov, model_link='log', at=c.at['o'], cen=c.cen['o'], cumul=True)
     _assert_pred_equals(pp, ref, 'crosspred(cb_o, coef=block from interface R model)')
+
+
+# ==============================================================================================================
+# the name= route (R: the name of the basis object) and the wording of the errors
+# ==============================================================================================================
+@pytest.mark.parametrize('design', DESIGNS)
+@pytest.mark.parametrize('tag', BASES)
+def test_name_argument_selects_the_block_like_R(design, tag):
+    """name= is the R object name that crosspred / crossreduce / attrdl / find_mmt grep for: with it every entry point
+    equals R, also for a model without informative names (ndarray, patsy matrix terms), where the name matches
+    no coefficient and the columns of the basis are found in the design matrix instead."""
+    c = _case('six_two')
+    res = _fit(c, design)
+    name = c.rn[tag]
+    _assert_pred_equals(py_crosspred(c, tag, model=res, name=name), r_crosspred(c, tag), f'crosspred(name=) {design}/{tag}')
+    _assert_red_equals(py_crossreduce(c, tag, 'overall', None, model=res, name=name),
+                       r_crossreduce(c, tag, 'overall', None), f'crossreduce(name=) {design}/{tag}')
+    for mode in ATTR_MODES:
+        _assert_attr_equals(py_attrdl(c, tag, mode, model=res, name=name), r_attrdl(c, tag, mode),
+                            f'attrdl(name=) {mode} {design}/{tag}')
+    assert py_mmt(c, tag, model=res, name=name) == r_mmt(c, tag)
+
+
+def test_name_attribute_of_the_basis_is_the_default_name():
+    """A basis carrying a `name` attribute uses it as the prefix; the name= argument overrides the attribute."""
+    from prediction import crosspred
+    c = _case('ten_ten')
+    res = _fit(c, 'dataframe')
+    named = copy.copy(c.py['o'])
+    named.name = c.rn['o']
+    with _quiet():
+        pp = crosspred(named, model=res, at=c.at['o'], cen=c.cen['o'], cumul=True)
+    _assert_pred_equals(pp, r_crosspred(c, 'o'), 'crosspred(basis.name)')
+    named.name = c.rn['t']                                  # the attribute names the temperature block ...
+    with _quiet():
+        pp_t = crosspred(named, model=res, at=c.at['o'], cen=c.cen['o'])
+        pp_o = crosspred(named, model=res, name=c.rn['o'], at=c.at['o'], cen=c.cen['o'])   # ... the argument wins
+    assert np.array_equal(pp_t.coefficients, _block(c, 'dataframe', res, 't')[0])
+    assert np.array_equal(pp_o.coefficients, _block(c, 'dataframe', res, 'o')[0])
+
+
+def test_name_matching_the_wrong_number_of_coefficients_raises():
+    """R's grep of a name that is a prefix of both bases selects 20 coefficients for a 10-column basis and stops."""
+    c = _case('ten_ten')
+    res = _fit(c, 'dataframe')
+    with pytest.raises(ValueError, match=r'coef=.*vcov='):
+        py_crosspred(c, 'o', model=res, name=f'{SP}_ten_ten_')
+    with pytest.raises(ValueError, match=r'coef=.*vcov='):
+        py_crossreduce(c, 'o', 'overall', None, model=res, name=f'{SP}_ten_ten_')
+
+
+class _NamedFit:
+    """A fitted model that exposes only params (named) and cov_params(): no design matrix to find a basis in."""
+
+    def __init__(self, names, coef, vcov):
+        import pandas as pd
+        self.params = pd.Series(coef, index=names)
+        self._vcov = vcov
+
+    def cov_params(self):
+        return self._vcov
+
+
+def test_name_selects_the_block_of_a_model_without_design_matrix_like_R():
+    """Without a design matrix the two bases can only be told apart by name (R's only route): name= selects each
+    block and equals R; without name= the ValueError asks for name= or coef=/vcov=."""
+    c = _case('ten_ten')
+    res = _fit(c, 'dataframe')
+    model = _NamedFit(c.names, np.asarray(res.params), np.asarray(res.cov_params()))
+    for tag in BASES:
+        pp = py_crosspred(c, tag, model=model, name=c.rn[tag], model_link='log')     # the stand-in has no family
+        _assert_pred_equals(pp, r_crosspred(c, tag), f'name={tag}')
+    with pytest.raises(ValueError, match=r'name=.*coef=.*vcov=|coef=.*vcov=.*name='):
+        py_crosspred(c, 't', model=model)
+
+
+def test_errors_of_the_model_route_are_short_and_not_repeated():
+    """The messages used to embed the multi-line summary of the basis several times (7 lines each)."""
+    c = _case('ten_ten')
+    c_t = _case('ten_ten', terms=('t',))
+    cases = [(py_crosspred, (c, 'o'), dict(model=_fit(c_t, 'dataframe'))),        # the basis is not in the model
+             (py_crossreduce, (c, 'o', 'overall', None), dict(model=_fit(c_t, 'numpy'))),
+             (py_crosspred, (c, 't'), dict(model=_NamedFit(c.names, np.asarray(_fit(c, 'dataframe').params),
+                                                          np.asarray(_fit(c, 'dataframe').cov_params()))))]
+    for call, args, kw in cases:
+        with pytest.raises(ValueError) as exc:
+            call(*args, **kw)
+        msg = str(exc.value)
+        assert '\n' not in msg and len(msg) < 350, msg
+        assert 'coef=' in msg and 'vcov=' in msg and 'Lag range' not in msg, msg
+
+
+@pytest.mark.parametrize('how', ['subset', 'shuffled', 'nan_rows_filled_with_zero'])
+def test_block_is_found_when_the_model_rows_are_not_the_basis_rows(how):
+    """The design of the model need not have the rows of the basis: observations dropped for other reasons, reordered
+    rows, or the lag-induced NaN rows filled with zeros.  The block found is the one at the known position."""
+    sm = pytest.importorskip('statsmodels.api')
+    from prediction import crosspred
+    c = _case('ten_ten')
+    rng = np.random.default_rng(11)
+    X, y = c.X.copy(), c.y.copy()
+    if how == 'subset':
+        keep = rng.uniform(size=len(y)) > 0.15
+        X, y = X[keep], y[keep]
+    elif how == 'shuffled':
+        perm = rng.permutation(len(y))
+        X, y = X[perm], y[perm]
+    else:
+        complete = np.isfinite(np.asarray(c.py['t'].basis)).all(axis=1)
+        full = np.zeros((len(complete), X.shape[1]))
+        full[complete] = X
+        yfull = np.zeros(len(complete))
+        yfull[complete] = y
+        X, y = full, yfull
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        res = sm.GLM(y, X, family=sm.families.Poisson()).fit(scale='X2', **GLM_TOL)
+    for tag in BASES:
+        coef, vcov = _block(c, 'numpy', res, tag)
+        with _quiet():
+            pp = crosspred(c.py[tag], model=res, at=c.at[tag], cen=c.cen[tag])
+        assert np.array_equal(pp.coefficients, coef), f'{how}/{tag}: wrong block'
+        assert np.array_equal(pp.vcov, vcov)
+
+
+def test_interface_name_argument_selects_the_second_crossbasis():
+    """name= also selects a cross-basis that was passed to the interface among other_vars (R names it 'ifo')."""
+    from prediction import crosspred
+    s = _iface_case()
+    c, iface = s['c'], s['iface']
+    _push(c, 'o')
+    r(f'{SP}_pIn <- local({{ ifo <- {c.rn["o"]}; crosspred(ifo, {SP}_ifit, at={SP}_at, cen={SP}_cen, cumul=TRUE) }})')
+    ref = {f: rget(f'unname({SP}_pIn${f})') for f in PRED_FIELDS_CB}
+    with _quiet():
+        pp = crosspred(c.py['o'], model=iface, name='ifo', at=c.at['o'], cen=c.cen['o'], cumul=True)
+    _assert_pred_equals(pp, ref, 'crosspred(cb_o, model=interface, name="ifo")')
+
+
+def test_interface_rejects_a_basis_that_is_not_in_its_model():
+    """A cross-basis that is neither the interface's own nor among its covariates is refused (it used to be given
+    the block of the interface's own cross-basis when the sizes agreed)."""
+    from basis import CrossBasis
+    from prediction import crosspred
+    s = _iface_case()
+    c, iface = s['c'], s['iface']
+    with _quiet():
+        stranger = CrossBasis(c.x['o'][::-1].copy(), lag=6, argvar=dict(fun='bs', degree=2, df=5),
+                              arglag=dict(fun='ns', df=2))
+    assert stranger.shape[1] == c.py['t'].shape[1]
+    with pytest.raises(ValueError, match=r'not in the model.*coef=.*vcov='):
+        crosspred(stranger, model=iface, at=c.at['o'], cen=c.cen['o'])

@@ -27,6 +27,7 @@ except ImportError:
     HAS_RPY2 = False
 
 from basis import CrossBasis
+from model_utils import locate_block
 
 
 # Name of the response column in the R data frame (``death ~ cb + ...`` as in the DLNM examples)
@@ -278,6 +279,7 @@ class Rpy2GLMInterface:
         self.family = None
         self.link = None
         self.cb_names = None
+        self._all_coef = self._all_names = self._all_vcov = None
 
         # Initialize R environment
         self._setup_r_environment()
@@ -405,6 +407,7 @@ class Rpy2GLMInterface:
             raise RuntimeError("the variance-covariance matrix of the R model does not match its coefficients")
         self.cb_coef = all_coef[idx]
         self.cb_vcov = vcov_all[np.ix_(idx, idx)]
+        self._all_coef, self._all_names, self._all_vcov = all_coef, coef_names, vcov_all   # any block: select_block
 
         aliased = [nm for nm, value in zip(cb_names, self.cb_coef) if np.isnan(value)]
         if aliased:
@@ -416,6 +419,34 @@ class Rpy2GLMInterface:
     def get_crossbasis_coefficients(self) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
         """Coefficients and variance-covariance matrix of the cross-basis block (None before a fit)."""
         return self.cb_coef, self.cb_vcov
+
+    def _is_own_basis(self, basis) -> bool:
+        """The cross-basis this interface was built on (the same object, or one with the same values)."""
+        own = self.crossbasis
+        if basis is own:
+            return True
+        a, b = getattr(basis, 'basis', None), getattr(own, 'basis', None)
+        return (a is not None and b is not None and np.shape(a) == np.shape(b)
+                and bool(np.array_equal(np.asarray(a, dtype=float), np.asarray(b, dtype=float), equal_nan=True)))
+
+    def select_block(self, basis, name: Optional[str] = None, kind: str = 'cb', ncol: Optional[int] = None,
+                     label: str = 'basis') -> Tuple[np.ndarray, np.ndarray]:
+        """Coefficients and variance-covariance matrix of the terms of ``basis`` in the fitted R model.
+
+        The cross-basis of the interface is its own block (``cb_coef``). Any other basis among the covariates
+        (``other_vars``) is found as R finds it, by ``name`` (prefix of its coefficient names) or, without a name, by
+        the columns of the design matrix of the R model that equal its columns (see ``model_utils.locate_block``).
+        A basis that is not in the model raises a ValueError."""
+        if self.r_model is None:
+            raise ValueError("No model fitted yet: call fit_glm() or fit_dlnm_model() first")
+        if name is None and self._is_own_basis(basis):
+            return self.cb_coef, self.cb_vcov
+        ncol = int(np.shape(basis)[1]) if ncol is None else int(ncol)
+        exog = np.array(r_eval(self._env, 'stats::model.matrix(model_fit)'), dtype=float)
+        if exog.shape[1] != len(self._all_names):
+            exog = None
+        idx = locate_block(self._all_names, len(self._all_names), ncol, kind, label, basis, name, exog)
+        return self._all_coef[idx], self._all_vcov[np.ix_(idx, idx)]
 
     def get_model_summary(self):
         """Get the R summary of the model fitted by this instance (``summary(glm)``: an R list)"""

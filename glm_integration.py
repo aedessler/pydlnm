@@ -104,6 +104,15 @@ class DLNMGLMInterface:
             return None, None
         return self.rpy2_interface.cb_coef, self.rpy2_interface.cb_vcov
     
+    def select_block(self, basis, name: Optional[str] = None, kind: str = 'cb', ncol: Optional[int] = None,
+                     label: str = 'basis') -> Tuple[np.ndarray, np.ndarray]:
+        """Coefficients and variance-covariance matrix of the terms of ``basis`` in the fitted R model: the
+        cross-basis of the interface, or another basis among its covariates (by ``name`` or by its columns; see
+        ``Rpy2GLMInterface.select_block``)."""
+        if self.rpy2_interface is None:
+            raise ValueError("No rpy2 interface available")
+        return self.rpy2_interface.select_block(basis, name=name, kind=kind, ncol=ncol, label=label)
+    
     def predict(self, newdata: Optional[np.ndarray] = None) -> np.ndarray:
         """
         Fitted values of the R model (R: ``fitted()``).
