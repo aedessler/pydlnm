@@ -218,8 +218,8 @@ class CrossPred:
                 raise ValueError("coef/vcov not consistent with basis matrix. See help(crosspred) "
                                  "(missing values, e.g. aliased coefficients of the model)")
         else:
-            self.coefficients = np.asarray(coef, dtype=float).ravel()
-            self.vcov = np.atleast_2d(np.asarray(vcov, dtype=float))
+            self.coefficients = np.array(coef, dtype=float).ravel()
+            self.vcov = np.atleast_2d(np.array(vcov, dtype=float))
             npar = len(self.coefficients)
             if (self.vcov.shape != (npar, npar) or np.isnan(self.coefficients).any() or np.isnan(self.vcov).any()
                     or npar > basis.shape[1]):
@@ -314,8 +314,10 @@ class CrossPred:
         self.predvar_names = [str(v) for v in self.predvar]
         self.lag_names = [f"lag{l:.15g}" for l in predlag]   # R: paste0("lag", predlag) (15 significant digits)
         
-        # Generate overall and cumulative predictions
+        # Generate overall and cumulative predictions (they rebuild Xpred for integer lags: keep the lag-specific one)
+        xpred_lag_specific = self.Xpred
         self._generate_overall_predictions()
+        self.Xpred = xpred_lag_specific
         
         # Generate confidence intervals
         self._generate_confidence_intervals()
@@ -476,7 +478,7 @@ class CrossPred:
             f"Link function: {self.model_link or 'identity'}",
             f"Prediction values: {len(self.predvar)} points",
             f"Lag range: [{self.lag[0]}, {self.lag[1]}]",
-            f"Confidence level: {self.ci_level:.0%}",
+            f"Confidence level: {self.ci_level:g}",
         ]
         
         if self.cen is not None:
@@ -551,12 +553,14 @@ def crosspred(basis: Union[OneBasis, CrossBasis],
         
     Examples
     --------
-    >>> from pydlnm import CrossBasis, crosspred, fit_dlnm_model
-    >>> cb = CrossBasis(temp, lag=21, argvar={'fun': 'bs'})
-    >>> model = fit_dlnm_model(cb, deaths, family='poisson')
-    >>> pred = crosspred(cb, model.fitted_values, cen=mean_temp)
+    >>> from basis import CrossBasis
+    >>> from prediction import crosspred
+    >>> cb = CrossBasis(temp, lag=21, argvar={'fun': 'bs', 'degree': 2, 'knots': knots},
+    ...                 arglag={'fun': 'ns', 'knots': lag_knots})
+    >>> # coef, vcov: the coefficients of the cross-basis from the fitted model
+    >>> pred = crosspred(cb, coef=coef, vcov=vcov, model_link='log', at=grid, cen=15.0)
     >>> print(pred.summary())
-    """
+        """
     
     # Validate parameters - either model or both coef and vcov must be provided
     if model is None and (coef is None or vcov is None):
