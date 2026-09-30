@@ -47,7 +47,7 @@ def rget(expr):
 def require_r_packages(*pkgs):
     """Skip the calling test if an R package is missing; otherwise load it quietly."""
     for p in pkgs:
-        ok = bool(ro.r(f'suppressWarnings(requireNamespace("{p}", quietly=TRUE))')[0])
+        ok = bool(ro.r(f'isTRUE(suppressWarnings(requireNamespace("{p}", quietly=TRUE)))')[0])
         if not ok:
             pytest.skip(f'R package {p} not installed')
         ro.r(f'suppressMessages(library({p}))')
