@@ -252,19 +252,13 @@ def getlink(model: Any,
     if model_class is None:
         model_class = type(model).__name__
     
-    # Handle PyDLNM's rpy2-based GLM interfaces
-    if model_class == 'DLNMGLMInterface':
-        # For quasi-Poisson family, the link is log
-        return 'log'
+    # PyDLNM's rpy2-based GLM interfaces: the link of the R model they fitted (log for the default quasi-Poisson family)
+    if model_class in ('DLNMGLMInterface', 'Rpy2GLMInterface', 'ImprovedGLMInterface'):
+        link = getattr(model, 'link', None)
+        if not isinstance(link, str):
+            link = getattr(getattr(model, 'rpy2_interface', None), 'link', None)
+        return link if isinstance(link, str) else 'log'
 
-    if model_class == 'Rpy2GLMInterface':
-        # For quasi-Poisson family, the link is log
-        return 'log'
-
-    if model_class == 'ImprovedGLMInterface':
-        # For quasi-Poisson family, the link is log
-        return 'log'
-    
     # Family attribute (statsmodels GLM results and models): family.link is a link object; R: model$family$link
     family = getattr(model, 'family', None)
     if family is None and hasattr(model, 'model'):
