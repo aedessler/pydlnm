@@ -28,8 +28,8 @@ Theme O -- GLM interfaces
   glm-13     (nit) ImprovedGLMInterface.crossreduce docstring: only guarded through plain tests (overall reduction
              equals R; an unknown reduction type raises)
 
-Tests decorated with @known_defect assert the R-faithful behaviour and fail today (strict xfail); the plain tests
-guard neighbouring behaviour that is already faithful and must keep passing while the fixes land.
+All findings above are fixed: the tests that used to be strict-xfail known defects are ordinary tests now, next to
+the plain tests that guard behaviour that was already faithful.
 
 Where the audit lists two acceptable fixes ("honour or reject") the test asserts the R-faithful one:
   * weights/offset/subset are honoured like R (an unknown keyword must be rejected, as R does);
@@ -50,7 +50,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from rhelpers import assert_close, chicago, known_defect, max_abs_diff, np2r, r, r2np, rget
+from rhelpers import assert_close, chicago, max_abs_diff, np2r, r, r2np, rget
 import rpy2.robjects as ro
 
 THEME = 'O'
@@ -151,7 +151,8 @@ class Ctx:
                           f'ns({self.df}$date, df={DFSEAS}*length(unique({self.df}$year))))')
         self.other_names = [f'o{i}' for i in range(self.other.shape[1])]
 
-    def r_fit(self, y='death', family='quasipoisson', dfseas=DFSEAS, weights=None, offset=None, subset=None, cb=None):
+    def r_fit(self, y='death', family='quasipoisson', dfseas=DFSEAS, weights=None, offset=None, subset=None, cb=None,
+              control=None):
         """R glm(y ~ cb + dowf + ns(date, df=dfseas*n_years)) with na.exclude; the model stays in R as `go_<tag>_m`."""
         args = ''
         for key, val in (('weights', weights), ('offset', offset), ('subset', subset)):
@@ -159,6 +160,8 @@ class Ctx:
                 np2r(f'{self.m}_{key}', np.asarray(val, dtype=float))
                 args += f', {key}=' + (f'as.logical({self.m}_{key})' if key == 'subset' else f'{self.m}_{key}')
         cb = cb or self.cbr
+        if control is not None:
+            args += f', control=glm.control({control})'
         r(f'{self.m} <- glm({y} ~ {cb} + dowf + ns(date, df={dfseas}*length(unique(year))), data={self.df}, '
           f'family={family}, na.action=na.exclude{args})')
         return self.reference(cb)
@@ -545,7 +548,6 @@ def _kwarg_case(c, label):
     return kw, ref
 
 
-@known_defect(THEME, 'glm-1', note='kwargs are never interpolated into the R glm() call')
 @pytest.mark.parametrize('kind', KINDS)
 @pytest.mark.parametrize('label', ('weights', 'offset', 'subset'))
 def test_glm_arguments_are_honoured_like_R(kind, label):
@@ -556,7 +558,6 @@ def test_glm_arguments_are_honoured_like_R(kind, label):
     assert_cb_block_matches(fit, ref, what=f'{kind} {label}=')
 
 
-@known_defect(THEME, 'glm-1', note='an invented keyword is accepted and ignored')
 @pytest.mark.parametrize('kind', KINDS)
 def test_unknown_glm_argument_is_rejected_like_R(kind):
     c = ctx('small')
@@ -564,6 +565,27 @@ def test_unknown_glm_argument_is_rejected_like_R(kind):
         r(f'glm(death ~ {c.cbr}, data={c.df}, bogus_kw=1)')
     with pytest.raises((TypeError, ValueError)):
         py_fit(kind, c, bogus_kw=1)
+
+
+def test_glm_control_is_honoured_like_R():
+    """control={...} is R's glm.control(): a loose convergence tolerance stops the IRLS early and changes the estimates."""
+    c = ctx('small')
+    plain = c.r_fit()
+    ref = c.r_fit(control='epsilon=1e-2')
+    assert max_abs_diff(ref.coef, plain.coef) > 1e-9, 'R: the control argument changes nothing'
+    assert_cb_block_matches(py_fit('improved', c, control={'epsilon': 1e-2}), ref, what='control=')
+    with pytest.raises(TypeError):
+        py_fit('improved', c, control={'no_such_option': 1})
+
+
+@pytest.mark.parametrize('kind', ('improved', 'rpy2', 'dlnm', 'fit_dlnm_model'))
+def test_fits_do_not_write_into_the_global_environment(kind):
+    """All R objects of a fit (data, family, model, seasonal basis, ...) live in the interface's private environment."""
+    c = ctx('small')
+    before = set(str(n) for n in r('ls(globalenv(), all.names=TRUE)'))
+    fit = py_fit(kind, c)
+    fit.iface.get_model_summary() if kind in ('improved', 'rpy2') else fit.iface.predict()
+    assert set(str(n) for n in r('ls(globalenv(), all.names=TRUE)')) == before
 
 
 # --------------------------------------------------------------------------------------------------------------
@@ -577,7 +599,6 @@ def _report(fit):
     return fit.summary_table()[:, :2]
 
 
-@known_defect(THEME, 'glm-2', note='summary()/fitted() evaluated by the global name fitted_model')
 @pytest.mark.parametrize('scenario', ('second_fit', 'user_variable'))
 @pytest.mark.parametrize('kind', ('improved', 'rpy2', 'dlnm'))
 def test_earlier_interface_is_not_disturbed_by_later_R_state(kind, scenario):
@@ -599,7 +620,6 @@ def test_earlier_interface_is_not_disturbed_by_later_R_state(kind, scenario):
 # --------------------------------------------------------------------------------------------------------------
 # glm-3 / crossreduce-1 / crossreduce-2: crossreduce through the interface objects
 # --------------------------------------------------------------------------------------------------------------
-@known_defect(THEME, 'glm-3', 'crossreduce-1', note='Rpy2/DLNMGLMInterface.crossreduce never return a result')
 @pytest.mark.parametrize('has_dlnm', (True, False))
 @pytest.mark.parametrize('kind', ('rpy2', 'dlnm'))
 def test_interface_crossreduce_method_matches_R(kind, has_dlnm):
@@ -614,7 +634,6 @@ def test_interface_crossreduce_method_matches_R(kind, has_dlnm):
     assert_close(vcov_p, vcov_r, rtol=1e-8, what='reduced vcov')
 
 
-@known_defect(THEME, 'glm-3', 'crossreduce-1', note='cen=None path of the R-object branch')
 def test_interface_crossreduce_without_cen_matches_R():
     c = ctx('small')
     c.r_fit()
@@ -625,7 +644,6 @@ def test_interface_crossreduce_without_cen_matches_R():
     assert_close(vcov_p, vcov_r, rtol=1e-8, what='reduced vcov')
 
 
-@known_defect(THEME, 'glm-3', 'crossreduce-1', note='type is never forwarded; the method crashes before validating it')
 @pytest.mark.parametrize('kind', ('rpy2', 'dlnm'))
 def test_interface_crossreduce_unknown_type_is_rejected_like_R(kind):
     c = ctx('small')
@@ -634,7 +652,6 @@ def test_interface_crossreduce_unknown_type_is_rejected_like_R(kind):
         fit.iface.crossreduce(cen=CEN, type='bogus')
 
 
-@known_defect(THEME, 'crossreduce-2', 'glm-3', note='module-level crossreduce() rejects the interface objects')
 @pytest.mark.parametrize('kind', ('improved', 'rpy2', 'dlnm'))
 def test_module_crossreduce_accepts_fitted_interface(kind):
     from crossreduce import crossreduce
@@ -650,7 +667,6 @@ def test_module_crossreduce_accepts_fitted_interface(kind):
 # --------------------------------------------------------------------------------------------------------------
 # glm-6: family names
 # --------------------------------------------------------------------------------------------------------------
-@known_defect(THEME, 'glm-6', note="documented family 'gamma' is evaluated as base::gamma in R")
 @pytest.mark.parametrize('kind', ('improved', 'rpy2', 'dlnm'))
 def test_documented_family_gamma_gives_R_Gamma_fit(kind):
     c = ctx('small')
@@ -660,7 +676,6 @@ def test_documented_family_gamma_gives_R_Gamma_fit(kind):
     assert_cb_block_matches(py_fit(kind, c, family='gamma'), ref, what=f'{kind} family="gamma"')
 
 
-@known_defect(THEME, 'glm-6', note='the family string is pasted into R source (injection point)')
 @pytest.mark.parametrize('kind', ('improved', 'rpy2'))
 def test_family_string_with_extra_R_arguments_is_rejected(kind):
     """R's family argument is an object or a NAME: a string carrying further glm() arguments is an error there
@@ -676,7 +691,6 @@ def test_family_string_with_extra_R_arguments_is_rejected(kind):
 # --------------------------------------------------------------------------------------------------------------
 # glm-7: day-of-week labels
 # --------------------------------------------------------------------------------------------------------------
-@known_defect(THEME, 'glm-7', note='static labels dowTuesday..dowSunday on columns Monday, Saturday, Sunday, ...')
 @pytest.mark.parametrize('rows', ('small', 'wkdays'))
 def test_dow_coefficient_labels_name_their_weekday(rows):
     """Each coefficient labelled dow<Day> is R's effect of <Day> (reference = first level alphabetically)."""
@@ -691,7 +705,6 @@ def test_dow_coefficient_labels_name_their_weekday(rows):
         assert_close(dow[day], value, rtol=1e-8, what=f'coefficient labelled dow{day}')
 
 
-@known_defect(THEME, 'glm-7', note='the printed reference level is the first date\'s weekday, not the alphabetical first')
 def test_dow_reference_level_message_names_the_dropped_weekday(capsys):
     c = ctx('small')                                              # first date is a Thursday; R's reference is Friday
     ref_level = str(r(f'levels({c.df}$dowf)[1]')[0])
@@ -704,7 +717,6 @@ def test_dow_reference_level_message_names_the_dropped_weekday(capsys):
 # --------------------------------------------------------------------------------------------------------------
 # glm-8: na.exclude padding
 # --------------------------------------------------------------------------------------------------------------
-@known_defect(THEME, 'glm-8', note='predict() has one value per kept row; R pads the excluded rows with NA')
 @pytest.mark.parametrize('nan_source', ('lag_rows', 'scattered_response'))
 def test_predict_is_padded_to_the_input_length_like_na_exclude(nan_source):
     c = ctx('small')
@@ -722,7 +734,6 @@ def test_predict_is_padded_to_the_input_length_like_na_exclude(nan_source):
 # --------------------------------------------------------------------------------------------------------------
 # glm-10: input handling
 # --------------------------------------------------------------------------------------------------------------
-@known_defect(THEME, 'glm-10', note='ImprovedGLMInterface does not coerce y')
 @pytest.mark.parametrize('label', ('list', 'column vector', 'DataFrame column'))
 def test_improved_accepts_response_shapes_like_a_vector(label):
     c = ctx('small')
@@ -731,7 +742,6 @@ def test_improved_accepts_response_shapes_like_a_vector(label):
     assert_cb_block_matches(py_fit('improved', c, yvals=yv), c.r_fit(), what=f'y as {label}')
 
 
-@known_defect(THEME, 'glm-10', note='dates given as list / datetime.date objects crash')
 @pytest.mark.parametrize('label', ('list of datetime', 'Series of datetime.date'))
 def test_improved_accepts_date_containers(label):
     c = ctx('small')
@@ -749,7 +759,6 @@ BAD_NAMES = {
 }
 
 
-@known_defect(THEME, 'glm-10', note='formula_vars are used raw as data-frame keys and formula terms')
 @pytest.mark.parametrize('label', sorted(BAD_NAMES))
 def test_covariate_names_do_not_change_the_cross_basis_fit(label):
     """The names of the covariates cannot change the cross-basis estimates in R.  PyDLNM must either reject a
@@ -764,7 +773,6 @@ def test_covariate_names_do_not_change_the_cross_basis_fit(label):
     assert_cb_block_matches(fit, ref, what=label)
 
 
-@known_defect(THEME, 'glm-10', note='wrong number of formula_vars gives an obscure R "object not found"')
 def test_wrong_number_of_covariate_names_is_rejected_clearly():
     c = ctx('small')
     with pytest.raises((ValueError, TypeError)):
@@ -774,7 +782,6 @@ def test_wrong_number_of_covariate_names_is_rejected_clearly():
 # --------------------------------------------------------------------------------------------------------------
 # glm-11: aliased coefficients
 # --------------------------------------------------------------------------------------------------------------
-@known_defect(THEME, 'glm-11', note='aliased cb coefficients become NaN in cb_coef/cb_vcov without warning or error')
 @pytest.mark.parametrize('kind', ('improved', 'rpy2'))
 def test_aliased_cross_basis_coefficients_are_rejected_like_R(kind):
     from improved_glm import ImprovedGLMInterface

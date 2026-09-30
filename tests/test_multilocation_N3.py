@@ -23,8 +23,8 @@ Theme N3
   mvmeta-blup-12  add_region_analysis / fit_dlnm_model crash with TypeError for a response given as a Python list
                   (docstring: array-like; R accepts any numeric vector, NA included).
 
-Tests decorated with @known_defect assert the R-faithful (or documented-correct) behaviour and fail today (strict xfail);
-the plain tests guard neighbouring behaviour that is already faithful and must keep passing while the fixes land.
+All findings above are fixed: the tests that used to be strict-xfail known defects are ordinary tests now, next to the
+plain tests that guard behaviour that was already faithful.
 
 Design notes
   * Sibling defect basis-cont-5 (theme M1): find_mmt_blup also builds its B-spline with the boundary knots of the 1st-99th
@@ -49,7 +49,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from rhelpers import REPO, assert_close, known_defect, np2r, r, r2np, rget      # rhelpers first: it starts R
+from rhelpers import REPO, assert_close, np2r, r, r2np, rget      # rhelpers first: it starts R
 
 THEME = 'N3'
 EW_CSV = REPO / '2015_gasparrini_Lancet_Rcodedata-master' / 'regEngWales.csv'      # data, not code: always the real repo
@@ -278,8 +278,6 @@ def assert_pooled_mmt_matches_r(run):
 # ==============================================================================================================
 # mvmeta-blup-2: pooled MMT must use the first-stage basis specification
 # ==============================================================================================================
-@known_defect(THEME, 'mvmeta-blup-2', note='bs/deg 2/P10-75-90 hard-coded; a basis of another width raises inside and '
-                                          'the regional median temperature is reported as the MMT')
 @pytest.mark.parametrize('spec_key', WIDTH_MISMATCH)
 def test_pooled_mmt_matches_r_when_first_stage_basis_has_another_width(spec_key):
     """ns (4 columns) and bs degree 3 (6 columns): R rebuilds the first-stage onebasis for the MMT search; PyDLNM builds a
@@ -287,7 +285,6 @@ def test_pooled_mmt_matches_r_when_first_stage_basis_has_another_width(spec_key)
     assert_pooled_mmt_matches_r(pipeline(spec_key))
 
 
-@known_defect(THEME, 'mvmeta-blup-2', note='hard-coded knots / find_mmt_blup ignores `fun`: wrong basis, no warning')
 @pytest.mark.parametrize('spec_key', SAME_WIDTH)
 def test_pooled_mmt_matches_r_when_first_stage_basis_has_the_same_width(spec_key):
     """Also 5 columns, but other knots (bs P25/50/75) or another function (ns with 4 knots): the shapes fit, so the
@@ -403,7 +400,6 @@ def test_pooled_mmt_keys_and_semantics_are_median_mean_std_of_regional_mmt_tempe
     assert not np.isclose(pm['pooled_mmt_median'], np.median(pcs)), 'the median is of temperatures (deg C), not of percentiles'
 
 
-@known_defect(THEME, 'mvmeta-blup-4', note="R's minperccountry = median(minperccity) (a percentile) is not exposed")
 def test_pooled_result_exposes_rs_country_level_median_percentile():
     """02.secondstage.R:74 `minperccountry <- median(minperccity)`: the audit's fix sketch adds the median MMT percentile to
     the pooled result under an explicit key (e.g. 'pooled_mmt_percentile_median').  Any top-level key that names a
@@ -453,7 +449,6 @@ def _duplicate_run():
     return an, None
 
 
-@known_defect(THEME, 'mvmeta-blup-5', note='meta-predictors keyed by region name: the second "East" gets the first one\'s')
 def test_duplicate_region_name_gets_its_own_meta_predictors_or_is_rejected():
     an, _ = _duplicate_run()
     if an is None:
@@ -472,7 +467,6 @@ def test_duplicate_region_name_gets_its_own_meta_predictors_or_is_rejected():
     assert_close(an.mv_model.coefficients, ref.coefficients, rtol=1e-10, what='meta-regression coefficients')
 
 
-@known_defect(THEME, 'mvmeta-blup-5', note='region_mmts is keyed by name: the second "East" overwrites the first')
 def test_duplicate_region_name_keeps_one_mmt_entry_per_region_or_is_rejected():
     an, _ = _duplicate_run()
     if an is None:
@@ -529,7 +523,6 @@ def _summary_numbers(summary):
                 df_residual=int(r2np(summary.rx2('df.residual'))[0]))
 
 
-@known_defect(THEME, 'mvmeta-blup-11', note="summary(fitted_model) evaluates the R global, i.e. the last region's model")
 def test_get_model_summary_returns_each_regions_own_model_after_later_fits():
     an, regs, refs = _three_region_fit()
     disp = [ref.dispersion for ref in refs]
@@ -586,7 +579,6 @@ def _add_london(y, dates=None, name='London'):
     return res
 
 
-@known_defect(THEME, 'mvmeta-blup-12', note='fit_dlnm_model indexes y[~nan_mask] without converting: TypeError for a list')
 @pytest.mark.parametrize('kind', ['floats', 'ints', 'with_nan'])
 def test_add_region_analysis_accepts_a_list_response(kind):
     """Docstring: y is array-like; R takes any numeric vector (NA included).  The reduced coefficients equal R's

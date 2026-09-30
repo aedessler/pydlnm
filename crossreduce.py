@@ -88,22 +88,19 @@ def crossreduce(basis: Union[CrossBasis, DLNMGLMInterface],
         raise ValueError(f"Reduction type '{reduction_type}' not implemented yet. Only 'overall' supported.")
     
     # Extract cross-basis and model information
-    if isinstance(basis, DLNMGLMInterface):
+    if isinstance(basis, DLNMGLMInterface) or callable(getattr(basis, 'get_crossbasis_coefficients', None)):
+        # A fitted GLM interface (DLNMGLMInterface, Rpy2GLMInterface, ImprovedGLMInterface): the cross-basis block
+        # that the interface selected by name from its R model
         cb_obj = basis.crossbasis
+        cb_coef, cb_vcov = basis.get_crossbasis_coefficients()
+        if cb_coef is None or cb_vcov is None:
+            raise ValueError("the GLM interface has no fitted model: call fit_glm() or fit_dlnm_model() first")
+        cb_coef = np.asarray(cb_coef, dtype=float)
+        cb_vcov = np.asarray(cb_vcov, dtype=float)
+        if np.isnan(cb_coef).any() or np.isnan(cb_vcov).any():
+            raise ValueError("coef/vcov do not consistent with basis matrix. See help(crossreduce)")
         
-        # Extract coefficients and variance-covariance matrix
-        n_cb_terms = cb_obj.shape[1]
-        fitted_model = basis.fitted_values  # DLNMGLMInterface stores fitted model in fitted_values
-        cb_coef = fitted_model.params[1:n_cb_terms+1]  # Skip intercept (index 0)
-        cb_vcov = fitted_model.cov_params()[1:n_cb_terms+1, 1:n_cb_terms+1]  # Skip intercept
-        
-        # Handle numpy arrays vs pandas series
-        if hasattr(cb_coef, 'values'):
-            cb_coef = cb_coef.values
-        if hasattr(cb_vcov, 'values'):
-            cb_vcov = cb_vcov.values
-            
-        model_info = {'type': 'dlnm_glm', 'family': getattr(basis, 'family', 'unknown')}
+        model_info = {'type': 'dlnm_glm', 'family': getattr(basis, 'family', None) or 'unknown'}
         
     elif isinstance(basis, CrossBasis):
         cb_obj = basis
