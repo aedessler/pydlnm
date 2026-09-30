@@ -578,15 +578,19 @@ def test_europe_second_stage_with_iqr_predictor_and_restricted_mmt_matches_R(eu)
         assert mmt_p == mmt_r, f'{reg.name}: BLUP-based MMT {mmt_p} vs R {mmt_r}'
 
 
-def test_mixmeta_only_control_name_is_rejected_like_R_mvmeta():
-    """code.R passes control = list(igls.inititer = 10) to mixmeta(); that spelling is mixmeta's.  R's mvmeta (whose
-    control PyDLNM's mvmeta follows) rejects it, and so must PyDLNM (loudly, not silently ignored)."""
+def test_mixmeta_only_control_name_is_accepted_like_R_mixmeta():
+    """code.R passes control = list(igls.inititer = 10) to mixmeta(); that spelling is mixmeta's (mvmeta.control refuses it).
+    MVMeta serves both vocabularies: igls.inititer = n is igls.iter = n (same fit), and both spellings at once raise."""
     from meta_analysis import mvmeta
-    require_r_packages('mvmeta')
+    require_r_packages('mvmeta', 'mixmeta')
     with pytest.raises(Exception, match='unused argument'):
         r('mvmeta::mvmeta.control(igls.inititer = 10)')
+    r('mixmeta:::mixmeta.control(igls.inititer = 10)')
     rng = np.random.default_rng(3)
     y = rng.normal(size=(12, 2))
     S = np.tile(0.04 * np.eye(2), (12, 1, 1))
-    with pytest.raises(TypeError):
-        mvmeta(y=y, S=S, control={'igls.inititer': 10})
+    a = mvmeta(y=y, S=S, control={'igls.inititer': 10})
+    b = mvmeta(y=y, S=S, control={'igls.iter': 10})
+    assert np.array_equal(a.coefficients, b.coefficients) and np.array_equal(a.psi, b.psi)
+    with pytest.raises(ValueError):
+        mvmeta(y=y, S=S, control={'igls.inititer': 10, 'igls.iter': 10})

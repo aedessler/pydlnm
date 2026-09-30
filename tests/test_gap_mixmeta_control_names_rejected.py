@@ -30,7 +30,7 @@ What this module checks (every reference is computed by R at run time, on the sa
       (tight R stopping rule: 1e-6, R's default stopping rule: 1e-4, the measured optimiser-limited precision).
     * showiter = TRUE (the published value) does not change the fit; mixmeta's default Scor = NULL equals Scor = 0.
     * a mildly indefinite S_i is accepted by default in R and in PyDLNM, with the same fit.
-  Known-defect tests (fail today, all one root cause: mixmeta-only control names raise TypeError)
+  Formerly known-defect tests (fixed: MVMeta now accepts the mixmeta-only control names)
     For each mixmeta-only option R accepts the call; PyDLNM must either honour it (fit equal to mixmeta's) or refuse it
     with a NotImplementedError that names the option.  TypeError "unused argument" (what mvmeta.control would say) and
     ValueError "igls.iter must be positive" (mvmeta's rule, not mixmeta's) are both wrong for a mixmeta call.
@@ -51,7 +51,7 @@ import warnings
 import numpy as np
 import pytest
 
-from rhelpers import assert_close, known_defect, max_rel_diff, np2r, r, r2np
+from rhelpers import assert_close, max_rel_diff, np2r, r, r2np
 
 G = 'gmc_'                      # prefix of every object this module creates in R's global environment
 
@@ -62,8 +62,6 @@ PUBLISHED_PY = {'showiter': True, 'igls.inititer': 10}
 
 TOL_DET, TOL_TIGHT, TOL_DEFAULT = 1e-8, 1e-6, 1e-4
 
-NOTE = 'MVMeta accepts mvmeta.control names only; mixmeta.control has igls.inititer / loglik.iter / checkPD / addSlist'
-DEFECT = known_defect('GAP', 'mixmeta_control_names_rejected', note=NOTE)
 
 
 # --------------------------------------------------------------------------------------------------------------
@@ -377,7 +375,6 @@ def test_mildly_indefinite_S_is_accepted_by_default_like_r():
 # ==============================================================================================================
 # Known defect: mixmeta-only control names are rejected (TypeError "unused argument")
 # ==============================================================================================================
-@DEFECT
 def test_published_europe_control_list_is_usable():
     """The control list of the published script, verbatim on both sides (showiter = TRUE, igls.inititer = 10, R's default
     stopping rule): PyDLNM must honour it (the fit is at mixmeta's optimum, BLUPs included, and as close to R's default
@@ -391,7 +388,6 @@ def test_published_europe_control_list_is_usable():
         assert_within_rs_stopping_error(m, d, ref_default, ref_tight, 'published control list')
 
 
-@DEFECT
 @pytest.mark.parametrize('n_init', [3, 10, 25])
 def test_igls_inititer_matches_mixmeta_tight(n_init):
     """igls.inititer = n is accepted and the fit equals mixmeta's (tight stopping rule, 1e-6): coefficients, vcov, Psi,
@@ -403,7 +399,6 @@ def test_igls_inititer_matches_mixmeta_tight(n_init):
         assert_matches_mixmeta(m, ref, d, 'reml', TOL_TIGHT, f'igls.inititer={n_init}')
 
 
-@DEFECT
 @pytest.mark.parametrize('n_init', [0, -3])
 def test_igls_inititer_nonpositive_is_accepted_like_r(n_init):
     """mixmeta.control: `if (igls.inititer <= 0L) igls.inititer <- 0` -- no IGLS iterations, the optimiser starts from
@@ -416,7 +411,6 @@ def test_igls_inititer_nonpositive_is_accepted_like_r(n_init):
         assert_matches_mixmeta(m, ref, d, 'reml', TOL_TIGHT, f'igls.inititer={n_init}')
 
 
-@DEFECT
 @pytest.mark.parametrize('loglik_iter', ['hybrid', 'newton', 'igls', 'rigls'])
 def test_loglik_iter_is_honoured_or_refused_by_name(loglik_iter):
     """loglik.iter picks mixmeta's optimisation route (RIGLS start then BFGS, BFGS only, pure (R)IGLS).  All routes end
@@ -431,7 +425,6 @@ def test_loglik_iter_is_honoured_or_refused_by_name(loglik_iter):
         assert_matches_mixmeta(m, ref, d, 'reml', TOL_TIGHT, f'loglik.iter={loglik_iter}')
 
 
-@DEFECT
 @pytest.mark.parametrize('check_pd', [True, False])
 def test_checkPD_flag_on_positive_definite_S(check_pd):
     """checkPD = TRUE / FALSE on positive-definite S_i changes nothing in R.  PyDLNM: same fit (1e-6) or a
@@ -445,7 +438,6 @@ def test_checkPD_flag_on_positive_definite_S(check_pd):
         assert_matches_mixmeta(m, ref, d, 'reml', TOL_TIGHT, f'checkPD={flag}')
 
 
-@DEFECT
 def test_checkPD_true_refuses_an_indefinite_S_like_r():
     """With checkPD = TRUE mixmeta stops on an S_i that has a negative eigenvalue ("Problems with positive-definiteness in
     'S'") although the default accepts it (test above).  PyDLNM must not silently fit: a ValueError about positive
@@ -465,7 +457,6 @@ def test_checkPD_true_refuses_an_indefinite_S_like_r():
         pytest.fail('checkPD = TRUE on an indefinite S_i was silently fitted (R: error)')
 
 
-@DEFECT
 def test_addSlist_supplies_S_through_control_like_r():
     """mixmeta(y ~ x) without S and control = list(addSlist = list of k x k matrices) equals the fit with S = that list.
     PyDLNM: same fit, or a NotImplementedError naming 'addSlist'.  (With S also given R stops: "'addSlist' only allowed
@@ -496,7 +487,6 @@ def test_addSlist_supplies_S_through_control_like_r():
         MVMeta(method='reml', control=dict(PY_TIGHT, addSlist=addS)).fit(d['y'], d['S'], d['X'])
 
 
-@DEFECT
 @pytest.mark.parametrize('method', ['fixed', 'mm', 'vc', 'ml', 'reml'])
 def test_mixmeta_only_key_is_accepted_with_every_method(method):
     """control = list(igls.inititer = 10) next to every estimation method: R's mixmeta() accepts it (for fixed / mm / vc it

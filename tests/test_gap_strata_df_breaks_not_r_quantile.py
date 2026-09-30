@@ -266,7 +266,6 @@ def test_breaks_not_unique_raises_in_python_exactly_where_r_raises():
     assert n_both_err > 0 and n_both_ok > 0          # the grid exercises both outcomes
 
 
-@known_defect('GAP', 'strata_df_breaks_not_r_quantile', note='continuous data, (n-1)/(k+1) integer: break on an observation')
 @pytest.mark.parametrize('k', [4, 9, 10])
 def test_continuous_exposure_with_break_on_an_observation_matches_r(k):
     """Even a fully continuous exposure is affected: when (n-1)/(k+1) is an integer the j-th break is exactly an
@@ -288,7 +287,6 @@ LAG_FAIL_CASES = [(10, 5, True), (15, 4, False), (20, 5, True), (30, 4, False), 
                   (10, 9, False), (20, 10, True)]        # (L, df, intercept): k = 4 and 9
 
 
-@known_defect('GAP', 'strata_df_breaks_not_r_quantile', note='lag basis: break 6.000000000000001 (R) vs 6.0 (PyDLNM)')
 @pytest.mark.parametrize('L, df, intercept', LAG_FAIL_CASES)
 def test_onebasis_strata_on_seqlag_matches_r(L, df, intercept):
     """onebasis(seqlag(c(0, L)), 'strata', df=) - the exact call crossbasis() makes for arglag=list(fun='strata')."""
@@ -296,7 +294,6 @@ def test_onebasis_strata_on_seqlag_matches_r(L, df, intercept):
     assert msg is None, msg
 
 
-@known_defect('GAP', 'strata_df_breaks_not_r_quantile', note='lag basis grid L=5..60')
 def test_onebasis_strata_on_seqlag_grid_matches_r():
     """lag = 5, 10, ..., 60 with (df, intercept) in {(5,T), (4,F), (3,T)}: all faithful only after the fix."""
     cases = [(_seqlag(0, L), df, ic, 1, f'seqlag(0,{L}) ')
@@ -304,7 +301,6 @@ def test_onebasis_strata_on_seqlag_grid_matches_r():
     assert_no_mismatch(cases, 'seqlag lag basis grid')
 
 
-@known_defect('GAP', 'strata_df_breaks_not_r_quantile', note='1-ulp difference of the break')
 def test_onebasis_strata_lag_breaks_are_bit_identical_to_r():
     """The root cause: R's break is 0x1.8000000000001p+2 (6.000000000000001) for seqlag(0, 10), df=5, intercept."""
     lagv = _seqlag(0, 10)
@@ -313,7 +309,6 @@ def test_onebasis_strata_lag_breaks_are_bit_identical_to_r():
     assert np.array_equal(pb, rb), f'breaks PyDLNM {pb.tolist()} vs R {rb.tolist()} (difference {np.abs(pb - rb).max():.2e})'
 
 
-@known_defect('GAP', 'strata_df_breaks_not_r_quantile', note='R quantile type 7 arithmetic')
 def test_strata_class_matches_r_strata_function_on_integer_range():
     """Direct use of the basis function: dlnm:::strata(0:10, df=4) versus StrataBasis(df=4)(0:10)."""
     from basis_functions import StrataBasis
@@ -332,7 +327,6 @@ def test_strata_class_matches_r_strata_function_on_integer_range():
 # ==============================================================================================================
 # 3. CrossBasis with a strata lag basis (argvar ns, lag over seqlag(lag))
 # ==============================================================================================================
-@known_defect('GAP', 'strata_df_breaks_not_r_quantile', note='cross-basis lag columns differ from R')
 @pytest.mark.parametrize('lag', [10, 15, 20, 30, 60])
 @pytest.mark.parametrize('arglag', [LAG_STRATA_DF5, LAG_STRATA_DF4_NOINT], ids=['df5', 'df4_noint'])
 def test_crossbasis_strata_lag_with_break_on_integer_lag_matches_r(lag, arglag):
@@ -407,7 +401,6 @@ def test_crossreduce_overall_strata_lag_without_integer_break_matches_r():
     _crossreduce_overall_vs_r(21)
 
 
-@known_defect('GAP', 'strata_df_breaks_not_r_quantile', note='lag-response at the tied lag is predicted in the wrong stratum')
 @pytest.mark.parametrize('lag', [20, 30])
 def test_crosspred_strata_lag_with_break_on_integer_lag_matches_r(lag):
     """Same coef / vcov in R and PyDLNM, lag 20 / 30: the lag where R's break sits (20 * 3/5 = 12 -> 12.000000000000002)
@@ -415,7 +408,6 @@ def test_crosspred_strata_lag_with_break_on_integer_lag_matches_r(lag):
     _crosspred_vs_r(lag)
 
 
-@known_defect('GAP', 'strata_df_breaks_not_r_quantile', note='reduced coefficients feed the multi-location meta-analysis')
 @pytest.mark.parametrize('lag', [20, 30])
 def test_crossreduce_overall_strata_lag_with_break_on_integer_lag_matches_r(lag):
     """The overall reduction (what mvmeta pools) uses the lag basis at seqlag(lag): reduced coefficients differ from R."""
@@ -425,14 +417,12 @@ def test_crossreduce_overall_strata_lag_with_break_on_integer_lag_matches_r(lag)
 # ==============================================================================================================
 # 5. var basis: strata(df) on an exposure with ties
 # ==============================================================================================================
-@known_defect('GAP', 'strata_df_breaks_not_r_quantile', note='var basis: 1-ulp break difference and a tied observation')
 def test_strata_df4_on_integers_0_to_10_matches_r():
     """x = 0:10, df=4: R's breaks are [2, 4, 6.000000000000001, 8] (PyDLNM: 6.0) so the observation 6 falls into stratum 3."""
     msg = strata_mismatch(np.arange(11.0), 4, False)
     assert msg is None, msg
 
 
-@known_defect('GAP', 'strata_df_breaks_not_r_quantile', note='var basis breaks not bit-identical')
 @pytest.mark.parametrize('name, x, df, intercept',
                          [('0:10', np.arange(11.0), 4, False), ('chicago[:731]', _temp(731), 4, False),
                           ('chicago[:731]', _temp(731), 5, True)], ids=['0to10_df4', 'chi731_df4', 'chi731_df5ic'])
@@ -442,7 +432,6 @@ def test_var_strata_breaks_are_bit_identical_to_r(name, x, df, intercept):
     assert np.array_equal(pb, rb), f'{name}: breaks PyDLNM {pb.tolist()} vs R {rb.tolist()}'
 
 
-@known_defect('GAP', 'strata_df_breaks_not_r_quantile', note='integer-valued exposure grid')
 def test_integer_valued_exposure_grid_matches_r():
     """Integer-valued exposures (n = 5..200, df = 2..10, both intercept settings): 12-15 % of the configurations put a
     tied observation into a different stratum than R."""
@@ -455,7 +444,6 @@ def test_integer_valued_exposure_grid_matches_r():
     assert_no_mismatch(cases, 'integer-valued exposure')
 
 
-@known_defect('GAP', 'strata_df_breaks_not_r_quantile', note='1-decimal exposure grid')
 def test_one_decimal_exposure_grid_matches_r():
     """Exposures rounded to 0.1 (thermometer resolution) - n = 5..200, df = 2..10."""
     rng = np.random.default_rng(12)
@@ -467,7 +455,6 @@ def test_one_decimal_exposure_grid_matches_r():
     assert_no_mismatch(cases, '1-decimal exposure')
 
 
-@known_defect('GAP', 'strata_df_breaks_not_r_quantile', note='chicago temperature: observations tie with (n-1)*p integer')
 @pytest.mark.parametrize('n, df, intercept', [(731, 4, False), (731, 5, True), (2021, 4, False), (2021, 5, True),
                                               (2441, 4, False)])
 def test_chicago_temperature_strata_with_tie_at_a_break_matches_r(n, df, intercept):
@@ -477,21 +464,18 @@ def test_chicago_temperature_strata_with_tie_at_a_break_matches_r(n, df, interce
     assert msg is None, msg
 
 
-@known_defect('GAP', 'strata_df_breaks_not_r_quantile', note='integer-rounded temperature')
 def test_integer_rounded_chicago_temperature_strata_matches_r():
     """Temperature recorded in whole degrees (116 rows differ at n=2441, df=4 in the audit)."""
     assert_no_mismatch([(_temp(n, rounded=True), df, ic, 1, 'rounded ') for n in (731, 2441, 3650)
                         for df in (3, 4, 5, 6) for ic in (False, True)], 'integer-rounded chicago temperature')
 
 
-@known_defect('GAP', 'strata_df_breaks_not_r_quantile', note='sweep over series lengths')
 def test_chicago_temperature_series_length_sweep_matches_r():
     """Sweep the series length (n = 300..1200, step 7) with df=5, intercept: a handful of lengths tie with a break."""
     t = chicago()['temp']
     assert_no_mismatch([(t[:n].copy(), 5, True, 1, 'chicago ') for n in range(300, 1200, 7)], 'length sweep')
 
 
-@known_defect('GAP', 'strata_df_breaks_not_r_quantile', note='NaN exposures are dropped before the quantile, ties at a break remain')
 def test_nan_exposure_with_ties_at_a_break_matches_r():
     """0:10 with three missing days mixed in (df = 4): quantile(na.rm=TRUE) sees 11 values, breaks as for x = 0:10."""
     rng = np.random.default_rng(2)
@@ -501,7 +485,6 @@ def test_nan_exposure_with_ties_at_a_break_matches_r():
     assert msg is None, msg
 
 
-@known_defect('GAP', 'strata_df_breaks_not_r_quantile', note='var basis of a cross-basis, chicago[:731] df=4')
 @pytest.mark.parametrize('n, rounded', [(731, False), (2021, False), (2441, True)],
                          ids=['chi731', 'chi2021', 'chi2441_rounded'])
 def test_crossbasis_strata_var_basis_with_tie_at_a_break_matches_r(n, rounded):

@@ -12,6 +12,7 @@ import warnings
 
 from basis import CrossBasis
 from prediction import CrossPred
+from utils import quantile7
 
 
 def find_mmt_blup(x: np.ndarray,
@@ -62,10 +63,10 @@ def find_mmt_blup(x: np.ndarray,
     
     # Prediction grid: percentiles of x (R: quantile, type 7)
     percentiles = np.arange(percentile_range[0], percentile_range[1] + 1)
-    predvar = np.percentile(x, percentiles)
+    predvar = quantile7(x, percentiles / 100)            # R: quantile(x, 1:99/100)
     
     if knots is None:
-        knots = np.percentile(x, [10, 75, 90])
+        knots = quantile7(x, np.array([10, 75, 90]) / 100)
     boundary = np.array([np.min(x), np.max(x)])
     
     if fun == "bs":
@@ -178,7 +179,7 @@ def find_mmt(basis: CrossBasis,
         raise ValueError("method must be 'overall' or 'lagspecific'")
     
     # Find minimum
-    min_idx = np.argmin(fit_values)
+    min_idx = int(np.nanargmin(fit_values))
     mmt_value = predvar[min_idx]
     mmt_fit = fit_values[min_idx]
     mmt_se = se_values[min_idx]

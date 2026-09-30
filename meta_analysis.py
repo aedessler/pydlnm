@@ -78,6 +78,10 @@ METHODS = ('fixed', 'ml', 'reml', 'mm', 'vc')
 
 _CONTROL_NAMES = ('optim', 'showiter', 'maxiter', 'initPsi', 'Psifix', 'Psicor', 'Scor', 'inputna', 'inputvar',
                   'igls.iter', 'hessian', 'vc.adj', 'reltol', 'set.negeigen')
+# mixmeta.control() names that mvmeta.control() does not have (the Europe-2022 second stage is a mixmeta() call):
+# igls.inititer = igls.iter that may be <= 0, loglik.iter = route of the optimiser, checkPD, addSlist = S given through control
+_MIXMETA_NAMES = ('igls.inititer', 'loglik.iter', 'checkPD', 'addSlist')
+_LOGLIK_ITER = ('hybrid', 'newton', 'igls', 'rigls')
 # entries of control['optim'] (R: a list handed to optim(method = "BFGS")) that have an equivalent here
 _OPTIM_NAMES = ('reltol', 'maxit', 'trace', 'REPORT', 'ndeps')
 
@@ -101,18 +105,40 @@ def _mvmeta_control(control) -> dict:
         control = {}
     if not isinstance(control, Mapping):
         raise TypeError(f"control must be a dict of mvmeta.control() options, not {type(control).__name__}")
-    unknown = [key for key in control if key not in _CONTROL_NAMES]
+    unknown = [key for key in control if key not in _CONTROL_NAMES and key not in _MIXMETA_NAMES]
     if unknown:
         raise TypeError("unused argument in control: " + ', '.join(repr(key) for key in unknown)
-                        + " (mvmeta.control accepts: " + ', '.join(_CONTROL_NAMES) + ")")
+                        + " (accepted: " + ', '.join(_CONTROL_NAMES + _MIXMETA_NAMES) + ")")
     ctl = {'optim': {}, 'showiter': False, 'maxiter': 500, 'initPsi': None, 'Psifix': None, 'Psicor': 0, 'Scor': 0,
            'inputna': False, 'inputvar': 1e4, 'igls.iter': 10, 'hessian': False, 'vc.adj': True, 'reltol': None,
-           'set.negeigen': _SQRT_EPS}
+           'set.negeigen': _SQRT_EPS, 'igls.inititer': None, 'loglik.iter': 'hybrid', 'checkPD': None,
+           'addSlist': None}
     ctl.update(control)
 
-    if ctl['igls.iter'] is None or not ctl['igls.iter'] >= 1:
-        raise ValueError("'igls.iter' in the control list must be positive")
-    ctl['igls.iter'] = int(ctl['igls.iter'])
+    if ctl['igls.inititer'] is not None:
+        # mixmeta.control: `if (igls.inititer <= 0L) igls.inititer <- 0` -- zero IGLS iterations is legal (start from
+        # diag(0.001)); mvmeta's igls.iter < 1 error does not apply
+        if 'igls.iter' in control:
+            raise ValueError("control has both 'igls.iter' (mvmeta) and 'igls.inititer' (mixmeta): give only one")
+        if not np.isscalar(ctl['igls.inititer']) or not np.isfinite(ctl['igls.inititer']):
+            raise ValueError("'igls.inititer' in the control list must be a number")
+        ctl['igls.iter'] = max(int(ctl['igls.inititer']), 0)
+    else:
+        if ctl['igls.iter'] is None or not ctl['igls.iter'] >= 1:
+            raise ValueError("'igls.iter' in the control list must be positive")
+        ctl['igls.iter'] = int(ctl['igls.iter'])
+    # R: match.arg(loglik.iter, c("hybrid", "newton", "igls", "rigls")), partial matching included. The route changes
+    # where R's optimiser starts and which algorithm it runs, not the optimum it stops at, so it is validated here and
+    # the optimum is always found by the BFGS from the IGLS start
+    route = ctl['loglik.iter']
+    hits = [name for name in _LOGLIK_ITER if isinstance(route, str) and route and name.startswith(route)]
+    if route in _LOGLIK_ITER:
+        hits = [route]
+    if len(hits) != 1:
+        raise ValueError(f"'arg' should be one of {', '.join(repr(m) for m in _LOGLIK_ITER)} (control['loglik.iter'])")
+    ctl['loglik.iter'] = hits[0]
+    if ctl['checkPD'] is not None:
+        ctl['checkPD'] = bool(ctl['checkPD'])
     if ctl['inputna']:
         raise NotImplementedError("control['inputna'] = True is not implemented in PyDLNM; missing outcomes are "
                                   "handled exactly by masking them study by study (R's default, inputna = FALSE)")
@@ -199,6 +225,39 @@ def _as_array(a, name):
         return np.array(a, dtype=float)             # always a copy: the fitted model owns its data
     except (TypeError, ValueError) as exc:
         raise ValueError(f"'{name}' could not be converted to a numeric array: {exc}") from None
+
+
+def _resolve_addSlist(S, ctl):
+    """mixmeta's ``control$addSlist``: the within-study covariances given through control instead of ``S``.
+
+    R (getSlist): an error when ``S`` is also given, a list with one k x k matrix per study otherwise, no missing values.
+    Returns the (n, k, k) array that stands in for ``S`` (or ``S`` itself without ``addSlist``).
+    """
+    add = ctl['addSlist']
+    if add is None:
+        return S
+    if S is not None:
+        raise ValueError("'addSlist' only allowed without 'S'")
+    try:
+        arr = np.array([np.atleast_2d(np.asarray(a, dtype=float)) for a in add])
+    except (TypeError, ValueError):
+        raise ValueError("'addSlist' not consistent with required format: a list with one covariance matrix per "
+                         "study") from None
+    if arr.ndim != 3 or arr.shape[1] != arr.shape[2]:
+        raise ValueError("wrong dimensions in 'addSlist': expected one square matrix per study")
+    if np.isnan(arr).any():
+        raise ValueError("no missing allowed in 'addSlist'")
+    return arr
+
+
+def _check_S_pd(S3, label):
+    """mixmeta's ``checkPD(error = TRUE)``: stop when a within-study covariance has a negative eigenvalue (the observed
+    outcomes of each study only; NaN rows / columns are the missing outcomes)."""
+    for i, S_i in enumerate(S3):
+        obs = ~np.isnan(np.diag(S_i))
+        if obs.any() and np.linalg.eigvalsh(S_i[np.ix_(obs, obs)]).min() < 0:
+            raise ValueError(f"Problems with positive-definiteness in '{label}' (study {i + 1}): "
+                             "a within-study covariance has a negative eigenvalue (control['checkPD'])")
 
 
 def _prepare(y, S, X, ctl):
@@ -780,8 +839,12 @@ class MVMeta:
     method : one of 'reml' (default), 'ml', 'fixed', 'mm', 'vc' (case-sensitive; anything else raises ValueError)
     control : dict of R ``mvmeta.control`` options: ``optim``, ``showiter``, ``maxiter``, ``initPsi``, ``Scor``,
         ``igls.iter``, ``hessian``, ``reltol``, ``vc.adj``, ``set.negeigen`` (``Psifix`` / ``Psicor`` are accepted and
-        ignored as in R for an unstructured Psi). Unknown names raise TypeError, ``inputna=True`` raises
-        NotImplementedError. See the module docstring for the differences in defaults.
+        ignored as in R for an unstructured Psi), plus the ``mixmeta.control`` names ``igls.inititer`` (like
+        ``igls.iter`` but <= 0 means no IGLS iterations), ``loglik.iter`` (validated; the optimum does not depend on
+        the route), ``checkPD`` (True: ValueError on a within-study covariance with a negative eigenvalue) and
+        ``addSlist`` (list of the k x k within-study covariances, instead of ``S``; ValueError if ``S`` is also given).
+        Unknown names raise TypeError, ``inputna=True`` raises NotImplementedError. See the module docstring for the
+        differences in defaults.
 
     Attributes after ``fit``
     ------------------------
@@ -815,7 +878,7 @@ class MVMeta:
         Parameters
         ----------
         y : (n_studies, k) estimates; NaN marks a missing outcome (studies with every outcome missing are dropped)
-        S : within-study covariances: (n_studies, k, k) array or list of (k, k) matrices, (n_studies, k(k+1)/2) vech rows
+        S : within-study covariances (None with control['addSlist']): (n_studies, k, k) array or list of (k, k) matrices, (n_studies, k(k+1)/2) vech rows
             (lower triangle of each S_i column by column, R's ``xpndMat`` layout), or (n_studies, k) variances
             (expanded with correlation control['Scor'], default 0)
         X : (n_studies, p) study-level covariates (meta-regression); default intercept only. Studies with a missing
@@ -827,7 +890,10 @@ class MVMeta:
         """
         method = _check_method(self.method)
         ctl = _mvmeta_control(self.control)
+        S = _resolve_addSlist(S, ctl)
         data = _prepare(y, S, X, ctl)
+        if ctl['checkPD'] or (ctl['checkPD'] is None and ctl['addSlist'] is not None):
+            _check_S_pd(data['S'], 'S' if ctl['addSlist'] is None else 'Slist')
         # the model owns copies of the data and starts from a clean state (a failed re-fit leaves no stale results)
         self.coefficients = self.vcov = self.psi = self.loglik = self.hessian = self.negeigen = None
         self.converged = False

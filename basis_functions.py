@@ -6,6 +6,7 @@ lag non-linear models, including linear, polynomial, spline, and specialized fun
 """
 
 import numpy as np
+from utils import quantile7
 from typing import Union, Optional, List, Tuple, Any, Dict
 import warnings
 
@@ -468,7 +469,8 @@ class StrataBasis(BaseBasisFunction):
             breaks = np.unique(np.atleast_1d(np.asarray(self.breaks, dtype=float)))
         elif self.df - intercept > 0:
             k = int(self.df) - intercept
-            breaks = np.quantile(x_clean, np.arange(1, k + 1) / (k + 1))
+            # R: quantile(x, 1/(df-intercept+1)*1:(df-intercept), na.rm=TRUE), in R's own arithmetic
+            breaks = quantile7(x_clean, (1.0 / (k + 1)) * np.arange(1, k + 1))
         else:
             breaks = None
         df = (0 if breaks is None else len(breaks)) + intercept

@@ -307,10 +307,10 @@ def random_chol_factor(k, seed):
 # ==============================================================================================================
 # N1d  mvmeta-est-6 / mvmeta-blup-7: unknown control keys, igls.iter < 1
 # ==============================================================================================================
-@pytest.mark.parametrize('key', ['bogus', 'checkPD', 'addSlist'])
+@pytest.mark.parametrize('key', ['bogus'])
 def test_unknown_control_key_raises_like_r(key):
-    """R: mvmeta.control() has no such argument -> error "unused argument".  (checkPD / addSlist belong to
-    mixmeta.control(), not mvmeta.control(), so R refuses them too.)"""
+    """R: mvmeta.control() has no such argument -> error "unused argument".  (checkPD / addSlist / loglik.iter /
+    igls.inititer belong to mixmeta.control(), which MVMeta also serves: tests/test_gap_mixmeta_control_names_rejected.py.)"""
     y, V, X = sim_var(30, 3, 2, 0.3, 5)
     assert r_error(f'mvmeta:::mvmeta.control({key}=1)') is not None, f'R must reject {key!r}'
     np2r(NAMES + 'y', y)

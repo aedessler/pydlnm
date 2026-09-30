@@ -232,6 +232,32 @@ def pretty(x, n=5, min_n=None, shrink_sml=0.75, high_u_bias=1.5, u5_bias=None, e
     return s
 
 
+def quantile7(x, probs) -> np.ndarray:
+    """
+    ``quantile(x, probs, type = 7, na.rm = TRUE)`` with R's own arithmetic.
+
+    numpy's default quantile is type 7 too, but interpolates with a different floating-point formula, and R's
+    probability vectors are built differently (``1/(k+1)*1:k`` is not ``(1:k)/(k+1)``). The results differ by ~1e-15,
+    which matters wherever a value is compared with a quantile (strata breaks: ``cut(x, right=FALSE)`` puts an
+    observation equal to a break into the upper stratum).
+    """
+    x = np.asarray(x, dtype=float).ravel()
+    x = np.sort(x[~np.isnan(x)])
+    probs = np.atleast_1d(np.asarray(probs, dtype=float))
+    n = len(x)
+    if n == 0:
+        return np.full(probs.shape, np.nan)
+    index = 1 + max(n - 1, 0) * probs
+    lo = np.floor(index).astype(int)
+    hi = np.ceil(index).astype(int)
+    qs = x[lo - 1].copy()
+    upper = x[hi - 1]
+    sel = (index > lo) & (upper != qs)
+    h = (index - lo)[sel]
+    qs[sel] = (1 - h) * qs[sel] + h * upper[sel]
+    return qs
+
+
 def lagmatrix(values: Union[np.ndarray, List[float]], lags: Union[np.ndarray, List[int]]) -> np.ndarray:
     """
     Matrix whose column j is ``values`` shifted by ``lags[j]`` (port of tsModel::Lag).
