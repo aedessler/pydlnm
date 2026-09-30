@@ -224,6 +224,31 @@ def pretty(x, n=5, min_n=None, shrink_sml=0.75, high_u_bias=1.5, u5_bias=None, e
     return s
 
 
+def lagmatrix(values: Union[np.ndarray, List[float]], lags: Union[np.ndarray, List[int]]) -> np.ndarray:
+    """
+    Matrix whose column j is ``values`` shifted by ``lags[j]`` (port of tsModel::Lag).
+
+    A positive lag uses past values (the first rows are NaN), a negative lag uses future values (the last rows
+    are NaN). Raises, like R, when the largest absolute lag is not smaller than the series length.
+    """
+    values = np.asarray(values, dtype=float).ravel()
+    lags = np.atleast_1d(np.asarray(lags)).astype(int)
+    n = len(values)
+    if lags.size == 0:
+        raise ValueError("'lags' must not be empty")
+    if np.max(np.abs(lags)) >= n:
+        raise ValueError("largest lag must be less than the length of the series")
+    out = np.full((n, len(lags)), np.nan)
+    for j, k in enumerate(lags):
+        if k > 0:
+            out[k:, j] = values[:n - k]
+        elif k < 0:
+            out[:n + k, j] = values[-k:]
+        else:
+            out[:, j] = values
+    return out
+
+
 def exphist(exposure: Union[np.ndarray, List[float]], 
             times: Optional[Union[np.ndarray, List[float]]] = None,
             lag: Union[np.ndarray, List[int], Tuple[int, ...]] = (0, 1),

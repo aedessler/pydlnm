@@ -76,6 +76,39 @@ def mkcen(cen, basis, range_):
     return cen
 
 
+def mkxpred(basis, at, predlag=None, cen=None) -> np.ndarray:
+    """
+    Design matrix of the predictions (port of R's ``mkXpred()``), as an array ``(n, n_lag, n_coef)``.
+
+    ``X[i, j]`` is the row of the (exposure-centred) design matrix for exposure ``at[i]`` at lag ``predlag[j]``.
+    ``at`` is a vector (the same exposure at every lag) or, for a CrossBasis, a matrix ``(n, n_lag)`` of exposure
+    histories. The bases are rebuilt from the arguments resolved on the training data. A OneBasis gives
+    ``(n, 1, n_coef)``.
+    """
+    at = np.asarray(at, dtype=float)
+    if isinstance(basis, CrossBasis):
+        predlag = seqlag(basis.lag) if predlag is None else np.asarray(predlag, dtype=float)
+        n_lag = len(predlag)
+        n = at.shape[0]
+        var_basis = OneBasis(at.ravel(), **basis.argvar).basis
+        if basis.arglag.get('fun') == 'integer':
+            lag_basis = np.eye(n_lag)
+        else:
+            lag_basis = OneBasis(predlag, **basis.arglag).basis
+        if cen is not None:
+            var_basis = var_basis - OneBasis([cen], **basis.argvar).basis
+        if at.ndim == 2:
+            if at.shape[1] != n_lag:
+                raise ValueError("matrix 'at' must have one column per lag")
+            return np.einsum('ijv,jl->ijvl', var_basis.reshape(n, n_lag, -1), lag_basis).reshape(n, n_lag, -1)
+        return np.einsum('iv,jl->ijvl', var_basis, lag_basis).reshape(n, n_lag, -1)
+    args = basis.resolved_args()
+    var_basis = OneBasis(at.ravel(), **args).basis
+    if cen is not None:
+        var_basis = var_basis - OneBasis([cen], **args).basis
+    return var_basis[:, None, :]
+
+
 class CrossPred:
     """
     Cross-prediction class for distributed lag models.
@@ -313,36 +346,9 @@ class CrossPred:
     
     def _create_crossbasis_prediction_matrix(self, predvar: np.ndarray, predlag: np.ndarray) -> np.ndarray:
         """Create prediction matrix for cross-basis (rows VAR-outer, LAG-inner; columns v*n_lag_basis + l)."""
-        n_var = len(predvar)
-        n_lag = len(predlag)
-        
-        # Marginal bases, rebuilt from the arguments resolved on the training data. A matrix 'at' gives one
-        # exposure value per (row, lag): R's varvec <- as.numeric(at).
-        if self._at_matrix is not None:
-            var_values = self._at_matrix.ravel()
-        else:
-            var_values = np.asarray(predvar, dtype=float)
-        var_basis = OneBasis(var_values, **self.basis.argvar).basis
-        
-        # integer lag: identity matrix (each lag is independent)
-        if self.basis.arglag.get('fun') == 'integer':
-            lag_basis = np.eye(n_lag)
-        else:
-            lag_basis = OneBasis(predlag, **self.basis.arglag).basis
-        
-        # Centering is applied to the exposure dimension only
-        if self.cen is not None:
-            cen_basis = OneBasis([self.cen], **self.basis.argvar).basis
-            var_basis = var_basis - cen_basis
-        
-        n_var_basis = var_basis.shape[1]
-        n_lag_basis = lag_basis.shape[1]
-        if self._at_matrix is not None:
-            var_basis = var_basis.reshape(n_var, n_lag, n_var_basis)
-            Xpred = np.einsum('ijv,jl->ijvl', var_basis, lag_basis)
-        else:
-            Xpred = np.einsum('iv,jl->ijvl', var_basis, lag_basis)
-        return Xpred.reshape(n_var * n_lag, n_var_basis * n_lag_basis)
+        at = self._at_matrix if self._at_matrix is not None else np.asarray(predvar, dtype=float)
+        x_pred = mkxpred(self.basis, at, predlag, self.cen)
+        return x_pred.reshape(x_pred.shape[0] * x_pred.shape[1], x_pred.shape[2])
     
     def _create_onebasis_prediction_matrix(self, predvar: np.ndarray, predlag: np.ndarray) -> np.ndarray:
         """Create prediction matrix for one-dimensional basis."""

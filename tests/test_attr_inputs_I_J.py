@@ -323,7 +323,6 @@ def _stub_log_model(coef, vcov):
 _RANGES = ['glob', 'cold', 'heat']
 
 
-@known_defect('J', 'attr-point-1', note='coef/vcov path has no link: log-RR used as RR')
 @pytest.mark.parametrize('kind,mode,rng_name',
                          [('full', 'af_obs', r_) for r_ in _RANGES] + [('full', 'an_obs', 'glob')] +
                          [('reduced', m_, r_) for m_ in ('af_obs', 'an_obs') for r_ in _RANGES])
@@ -336,7 +335,6 @@ def test_coef_vcov_only_per_observation_matches_R(chi, kind, mode, rng_name):
     assert_same(py, ref, f'attrdl {kind} coef {mode} {rng_name}')
 
 
-@known_defect('J', 'attr-point-1', note='coef/vcov path has no link: log-RR used as RR')
 @pytest.mark.parametrize('kind,mode,x0', [('full', 'an_tot', 'hot'), ('full', 'af_tot', 'cold'),
                                           ('reduced', 'an_tot', 'cold'), ('reduced', 'an_tot', 'hot'),
                                           ('reduced', 'af_tot', 'hot')])
@@ -348,7 +346,6 @@ def test_coef_vcov_only_totals_at_constant_exposure_match_R(chi, kind, mode, x0)
     assert_same(py, ref, f'attrdl {kind} coef {mode} x={x0}')
 
 
-@known_defect('J', 'attr-point-1', note='03.attr.R call: reduced BLUP-style coef, dir=forw, cen=MMT')
 @pytest.mark.parametrize('rng_name', _RANGES)
 @pytest.mark.parametrize('mode', ['af_obs', 'an_obs'])
 def test_lancet_03_attr_call_england_wales_london_matches_R(ew_london, mode, rng_name):
@@ -360,7 +357,6 @@ def test_lancet_03_attr_call_england_wales_london_matches_R(ew_london, mode, rng
     assert_same(py, ref, f'Lancet-style attrdl London {mode} {rng_name}')
 
 
-@known_defect('J', 'attr-point-1', note='03.attr.R call: total AN')
 @pytest.mark.parametrize('x0', ['cold', 'hot'])
 def test_lancet_03_attr_call_total_an_matches_R(ew_london, x0):
     ds = ew_london
@@ -518,7 +514,6 @@ def test_attrdl_statsmodels_glm_matches_R(sub, family, mode, x0, cen):
     assert_same(py, ref, f'attrdl(statsmodels {family}) {mode} cen={cen}')
 
 
-@known_defect('I2', 'attr-point-5', note='no link check: identity-link model accepted, log-RR used as RR')
 def test_attrdl_rejects_non_log_logit_model_like_R(sub):
     """R attrdl(model=<gaussian glm>) stops with "'model' must have a log or logit link function"; PyDLNM must raise
     too instead of returning numbers."""

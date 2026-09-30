@@ -467,7 +467,6 @@ BACK_CASES = [(typ, tot, rname) for typ in ('an', 'af') for tot in (True, False)
               for rname in ('none', 'cold', 'heat', 'mid')]
 
 
-@known_defect('K', 'attr-point-2', note="dir='back' is evaluated exactly like 'forw' (no lagged exposure history)")
 @pytest.mark.parametrize('typ,tot,rname', BACK_CASES,
                          ids=[f'{t}-{"tot" if o else "obs"}-{n}' for t, o, n in BACK_CASES])
 def test_dir_back_matches_r(chi, typ, tot, rname):
@@ -479,7 +478,6 @@ def test_dir_back_matches_r(chi, typ, tot, rname):
     assert_close(py, ref, rtol=1e-8, what=f"dir='back' {typ} tot={tot} range {rname}")
 
 
-@known_defect('K', 'attr-point-2', note="'back' returns the 'forw' number")
 @pytest.mark.parametrize('rname', ['none', 'heat'])
 def test_dir_back_differs_from_forw_like_r(chi, rname):
     """R distinguishes the two perspectives (per-observation AF, which does not involve the forward average of the
@@ -498,7 +496,6 @@ def test_dir_back_differs_from_forw_like_r(chi, rname):
 
 
 # ---- attr-point-3: forward moving average of the cases, rescaling to the observed cases, NaN kept in place ----------
-@known_defect('K', 'attr-point-3', note='same-day cases, no rescaling of the total to the observed cases')
 @pytest.mark.parametrize('typ', ['an', 'af'])
 def test_forw_totals_match_r(chi, typ):
     """R dir='forw', tot=TRUE: cases_t -> forward mean over the lag window, af = sum(an)/sum(cases_fwd) over the rows
@@ -508,8 +505,6 @@ def test_forw_totals_match_r(chi, typ):
     assert_close(py, ref, rtol=1e-8, what=f'forw total {typ}')
 
 
-@known_defect('K', 'attr-point-3', 'attr-point-4',
-              note='forward average / rescaling, and the AF denominator with a range')
 @pytest.mark.parametrize('typ', ['an', 'af'])
 @pytest.mark.parametrize('rname', ['cold', 'heat', 'mid'])
 def test_forw_totals_with_range_match_r(chi, typ, rname):
@@ -520,7 +515,6 @@ def test_forw_totals_with_range_match_r(chi, typ, rname):
     assert_close(py, ref, rtol=1e-8, what=f'forw total {typ}, range {rname}')
 
 
-@known_defect('K', 'attr-point-3', note='per-observation AN uses same-day cases and has no NaN for the last lag rows')
 def test_forw_per_obs_an_uses_forward_average(chi):
     ref = chi.r_attrdl(type='an', dir='forw', tot=False, cen=chi.cen)
     assert int(np.isnan(ref).sum()) == LAG, 'R: the last lag[2] rows have an incomplete forward window'
@@ -530,7 +524,6 @@ def test_forw_per_obs_an_uses_forward_average(chi):
     assert_close(py[ok], ref[ok], rtol=1e-8, what='per-observation AN on the rows with a complete window')
 
 
-@known_defect('K', 'attr-point-3', note='missing exposure / cases handled by dropping rows instead of in place')
 @pytest.mark.parametrize('where', ['x', 'cases'])
 def test_forw_total_an_with_missing_data_matches_r(chi, where):
     rng_ = np.random.default_rng(5)
@@ -544,7 +537,6 @@ def test_forw_total_an_with_missing_data_matches_r(chi, where):
 
 
 # ---- attr-point-4: AF denominator with a range ---------------------------------------------------------------------
-@known_defect('K', 'attr-point-4', note='af_total divides by the cases inside the range')
 @pytest.mark.parametrize('rname', ['cold', 'heat', 'mid'])
 def test_af_total_denominator_is_all_observed_cases(chi, rname):
     """R: an = af * den, so af_total = an_total / (all observed cases) for every range. (The identity does not involve
@@ -558,7 +550,6 @@ def test_af_total_denominator_is_all_observed_cases(chi, rname):
         f"af_total {res['af_total']:.6f} vs an_total/all cases {res['an_total'] / chi.cases.sum():.6f}"
 
 
-@known_defect('K', 'attr-point-4', note='heat AF + cold AF != total AF')
 def test_heat_af_plus_cold_af_equals_total_af(chi):
     cen = chi.cen
     r_af = [chi.r_attrdl(type='af', tot=True, cen=cen, rng=rg)[0] for rg in (None, (-100., cen), (cen, 100.))]
@@ -569,7 +560,6 @@ def test_heat_af_plus_cold_af_equals_total_af(chi):
         f'cold {py_af[1]:.5f} + heat {py_af[2]:.5f} != total {py_af[0]:.5f}'
 
 
-@known_defect('K', 'attr-point-4', note='attr_heat_cold / attr_by_percentiles report af_total over the in-range cases')
 def test_wrapper_af_totals_use_all_observed_cases(chi):
     den = chi.cases.sum()
     hc = chi.py_call('attr_heat_cold', cen=chi.cen)
@@ -582,7 +572,6 @@ def test_wrapper_af_totals_use_all_observed_cases(chi):
 
 
 # ---- attr-point-7: cen ---------------------------------------------------------------------------------------------
-@known_defect('K', 'attr-point-7', note="basis argvar['cen'] ignored, a coarse-grid MMT is used instead")
 def test_cen_stored_in_the_basis_is_used(chi):
     """R: cen missing -> attr(basis, 'argvar')$cen. (Per-observation AF is used so that the forward average of
     attr-point-3 plays no role.)"""
@@ -593,7 +582,6 @@ def test_cen_stored_in_the_basis_is_used(chi):
     assert res['metadata']['centering'] == chi.cen
 
 
-@known_defect('K', 'attr-point-7', note='cen=None silently substitutes a grid MMT (or the mean) instead of an error')
 def test_missing_cen_is_an_error_like_r(chi):
     msg = _r_error(lambda: chi.r_attrdl(type='an', dir='forw', tot=True))
     assert 'cen' in msg
@@ -602,7 +590,6 @@ def test_missing_cen_is_an_error_like_r(chi):
 
 
 # ---- attr-point-9: sim=True crash ---------------------------------------------------------------------------------
-@known_defect('K', 'attr-point-9', note="ValueError: truth value of an array is ambiguous (type includes 'an')")
 @pytest.mark.parametrize('typ', ['an', 'both', None], ids=['an', 'both', 'default-type'])
 def test_sim_an_returns_nsim_draws(small, typ):
     """R attrdl(sim=TRUE, tot=TRUE) returns nsim simulated totals (the Lancet script uses type='an', sim=T)."""
@@ -620,7 +607,6 @@ def test_sim_an_returns_nsim_draws(small, typ):
         assert draws.min() - 1e-9 * abs(lo) <= lo and hi <= draws.max() + 1e-9 * abs(hi)
 
 
-@known_defect('K', 'attr-point-9', note="crash in the simulation summary for type='an'")
 def test_sim_an_with_zero_vcov_reproduces_point_estimate(small):
     nsim = 4
     sc = small.replace(vcov=np.zeros((len(small.coef),) * 2))
@@ -632,7 +618,6 @@ def test_sim_an_with_zero_vcov_reproduces_point_estimate(small):
     assert draws.shape == (nsim,) and np.allclose(draws, res['an_total'], rtol=1e-12, atol=0)
 
 
-@known_defect('K', 'attr-point-9', note='the convenience wrappers and summary_report (default sim=True) crash')
 def test_sim_wrappers_do_not_crash(small):
     import attribution
     nsim = 3
@@ -654,7 +639,6 @@ def _with_nan_x(chi):
     return chi.replace(x=x)
 
 
-@known_defect('K', 'attr-point-12', note='np.percentile thresholds are NaN => every observation masked, results 0.0')
 def test_percentile_bins_ignore_nan_exposure(chi):
     """R (Gasparrini scripts): thresholds are quantile(x, p, na.rm=TRUE); attrdl itself skips the missing exposure."""
     sc = _with_nan_x(chi)
@@ -670,7 +654,6 @@ def test_percentile_bins_ignore_nan_exposure(chi):
     assert np.all(np.isfinite(an)) and np.all(an > 0), f'bins with NaN exposure: an_total {an}'
 
 
-@known_defect('K2', 'attr-point-12', 'attr-sim-13', note='NaN thresholds => cold and heat are exactly 0.0, no warning')
 def test_attr_heat_cold_with_nan_exposure_is_not_zero(chi):
     """A missing temperature must not silence the function (thresholds via na.rm=TRUE) nor make every observation both
     cold and heat: R's cold and heat pieces are disjoint, so their sum cannot exceed the total."""
@@ -688,7 +671,6 @@ def test_attr_heat_cold_with_nan_exposure_is_not_zero(chi):
 PARTITION = [(0, 1), (1, 5), (5, 10), (10, 50), (50, 90), (90, 95), (95, 99), (99, 100)]
 
 
-@known_defect('K', 'attr-point-13', note='closed bins: observations equal to a shared threshold are counted twice')
 def test_percentile_bins_partition_the_observations(chi):
     """Contiguous bins covering the 0-100 percentiles must count every observation once: the per-observation AF
     summed over the bins equals R's per-observation AF of the whole series."""
@@ -700,7 +682,6 @@ def test_percentile_bins_partition_the_observations(chi):
     assert_close(af_sum, ref, rtol=1e-8, what='sum over percentile bins of the per-observation AF')
 
 
-@known_defect('K', 'attr-point-13', note='sum of bin totals exceeds the total (tied values counted twice)')
 def test_percentile_bin_an_totals_add_up(chi):
     res = chi.py_call('attr_by_percentiles', cen=chi.cen, percentile_ranges=PARTITION)
     whole = float(chi.py_attrdl(type='an', tot=True, cen=chi.cen)['an_total'])
@@ -709,7 +690,6 @@ def test_percentile_bin_an_totals_add_up(chi):
 
 
 # ---- attr-point-14: alignment of tot=False output and NaN handling (ONE verifier only) -----------------------------
-@known_defect('K', 'attr-point-14', note='rows with a missing exposure / case are dropped, the output is shorter than x')
 @pytest.mark.parametrize('where', ['x', 'cases'])
 def test_per_obs_af_is_aligned_with_the_input(chi, where):
     """R returns one AF per input row (length n); NaN exactly where the exposure is missing (AF does not use cases)."""
@@ -722,7 +702,6 @@ def test_per_obs_af_is_aligned_with_the_input(chi, where):
     assert_close(py, ref, rtol=1e-8, what=f'per-observation AF with NaN in {where}')
 
 
-@known_defect('K', 'attr-point-14', note='no NaN for the trailing rows whose forward window is incomplete')
 def test_per_obs_an_has_nan_for_incomplete_forward_window(chi):
     """Constant cases make the forward moving average a no-op, so only the NaN handling differs from R."""
     sc = chi.replace(cases=np.full(len(chi.x), 20.0))
@@ -732,7 +711,6 @@ def test_per_obs_an_has_nan_for_incomplete_forward_window(chi):
     assert_close(py, ref, rtol=1e-8, what='per-observation AN, constant cases')
 
 
-@known_defect('K', 'attr-point-14', note='all-zero cases: 0.0 instead of NaN (0/0)')
 @pytest.mark.parametrize('typ', ['an', 'af'])
 @pytest.mark.parametrize('rname', ['none', 'heat'])
 def test_all_zero_cases_give_nan_like_r(chi, typ, rname):
@@ -745,7 +723,6 @@ def test_all_zero_cases_give_nan_like_r(chi, typ, rname):
 
 
 # ---- attr-point-15: argument handling -------------------------------------------------------------------------------
-@known_defect('K', 'attr-point-15', note="type='AF' / 'foo' returns an empty result instead of an error (R: match.arg)")
 @pytest.mark.parametrize('bad', ['AF', 'foo'])
 def test_invalid_type_is_an_error_like_r(chi, bad):
     assert _r_error(lambda: chi.r_attrdl(type=bad, dir='forw', tot=True, cen=chi.cen))
@@ -753,7 +730,6 @@ def test_invalid_type_is_an_error_like_r(chi, bad):
         chi.py_attrdl(type=bad, dir='forw', tot=True, cen=chi.cen)
 
 
-@known_defect('K', 'attr-point-15', note="R's match.arg accepts abbreviations of dir; PyDLNM raises")
 @pytest.mark.parametrize('abbr,full', [('f', 'forw'), ('b', 'back')])
 def test_dir_partial_matching_like_r(chi, abbr, full):
     r_full = chi.r_attrdl(type='af', dir=full, tot=False, cen=chi.cen)
@@ -764,7 +740,6 @@ def test_dir_partial_matching_like_r(chi, abbr, full):
     assert np.array_equal(py_abbr, py_full, equal_nan=True)
 
 
-@known_defect('K', 'attr-point-15', note='matrix x / cases: cryptic numpy broadcast error (R supports both)')
 @pytest.mark.parametrize('which', ['x-matrix-back', 'cases-matrix-forw'])
 def test_matrix_inputs_like_r_or_clear_error(chi, which):
     """R: x may be the matrix of lagged exposures (dir='back'), cases the matrix of future cases (dir='forw').
@@ -785,8 +760,6 @@ def test_matrix_inputs_like_r_or_clear_error(chi, which):
     assert_close(_out(res, 'an', True), ref, rtol=1e-8, what=which)
 
 
-@known_defect('K', 'attr-point-15',
-              note="R: \"'x' must be a vector when dir='forw'\" / \"'cases' must be a vector if dir='back'\"")
 @pytest.mark.parametrize('which', ['x-matrix-forw', 'cases-matrix-back'])
 def test_matrix_inputs_rejected_like_r_with_a_clear_message(chi, which):
     lags = np.arange(LAG + 1)
@@ -804,7 +777,6 @@ def test_matrix_inputs_rejected_like_r_with_a_clear_message(chi, which):
 
 
 # ---- attr-point-16: attrdl_proper -----------------------------------------------------------------------------------
-@known_defect('K', 'attr-point-16', note='attrdl_proper ignores cen and vcov, gives NaN for a CrossBasis matrix')
 def test_attrdl_proper_reproduces_r_or_is_removed(chi):
     """attrdl_proper(x, basis_matrix, cases, coef, vcov, cen, ...) advertises R-style attribution from a cross-basis
     matrix, i.e. the backward perspective. The finding's fix is to delete it (or make it a thin wrapper); a version
@@ -819,7 +791,6 @@ def test_attrdl_proper_reproduces_r_or_is_removed(chi):
 
 
 # ---- attr-point-17: the design matrix is rebuilt for every simulation draw --------------------------------------------
-@known_defect('K', 'attr-point-17', note='one CrossPred (nested Python loops, ~1.5 s at n=5114) per draw; R builds Xpredall once')
 def test_simulation_does_not_rebuild_the_design_per_draw(small, monkeypatch):
     """R (attrdl.R, lines 105-172) builds Xpredall once and needs one matrix product per draw. The coefficient-
     independent design must therefore be built the same number of times whatever nsim is (counted deterministically
@@ -842,7 +813,6 @@ def test_simulation_does_not_rebuild_the_design_per_draw(small, monkeypatch):
 
 
 # ---- attr-sim-13 (K2): attr_heat_cold splits at percentiles, not at cen -----------------------------------------------
-@known_defect('K2', 'attr-sim-13', note='cold/heat are the 2.5% / 97.5% tails (about 8% of the total), not the sides of cen')
 def test_attr_heat_cold_splits_at_cen_and_covers_the_total(chi):
     """03.attr.R: cold = range c(-100, cen), heat = range c(cen, 100), cold + heat = total (also in R). attr_heat_cold
     given a cen must therefore report the two sides of cen, not the tails beyond the 2.5th / 97.5th percentiles."""
@@ -858,7 +828,6 @@ def test_attr_heat_cold_splits_at_cen_and_covers_the_total(chi):
     assert _rel(cold + heat, whole) <= 1e-8, f'cold + heat {cold + heat:.3f} vs total {whole:.3f}'
 
 
-@known_defect('K2', 'attr-sim-13', 'attr-point-3', note='needs the split at cen AND the forward algorithm of attr-point-3')
 @pytest.mark.parametrize('side', ['cold', 'heat'])
 def test_attr_heat_cold_matches_r_attrdl_ranges(chi, side):
     cen = chi.cen
