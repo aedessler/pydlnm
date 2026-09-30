@@ -12,7 +12,7 @@ import warnings
 
 from basis import OneBasis, CrossBasis
 from model_utils import validate_model_compatibility
-from utils import mklag, seqlag, pretty
+from utils import asfloat, mklag, seqlag, pretty
 
 
 def mkat(at, from_val, to_val, by, range_, lag=None, bylag=1.0) -> np.ndarray:
@@ -34,7 +34,7 @@ def mkat(at, from_val, to_val, by, range_, lag=None, bylag=1.0) -> np.ndarray:
         if grid.size == 0:
             raise ValueError("no prediction values between 'from' and 'to'")
         return grid if by is None else seqlag([grid.min(), to_val], by)
-    at = np.asarray(at, dtype=float)
+    at = asfloat(at)                   # masked / nullable cells are missing values (NaN), as R's NA
     if at.ndim == 2:
         n_lags = int(np.diff(mklag(lag))[0]) + 1
         if at.shape[1] != n_lags:
@@ -85,9 +85,9 @@ def mkxpred(basis, at, predlag=None, cen=None) -> np.ndarray:
     histories. The bases are rebuilt from the arguments resolved on the training data. A OneBasis gives
     ``(n, 1, n_coef)``.
     """
-    at = np.asarray(at, dtype=float)
+    at = asfloat(at)
     if isinstance(basis, CrossBasis):
-        predlag = seqlag(basis.lag) if predlag is None else np.asarray(predlag, dtype=float)
+        predlag = seqlag(basis.lag) if predlag is None else asfloat(predlag)
         n_lag = len(predlag)
         n = at.shape[0]
         var_basis = OneBasis(at.ravel(), **basis.argvar).basis
@@ -217,8 +217,8 @@ class CrossPred:
                 raise ValueError("coef/vcov not consistent with basis matrix. See help(crosspred) "
                                  "(missing values, e.g. aliased coefficients of the model)")
         else:
-            self.coefficients = np.array(coef, dtype=float).ravel()
-            self.vcov = np.atleast_2d(np.array(vcov, dtype=float))
+            self.coefficients = asfloat(coef, copy=True).ravel()       # a masked / NA entry is NaN: rejected below
+            self.vcov = np.atleast_2d(asfloat(vcov, copy=True))
             npar = len(self.coefficients)
             if (self.vcov.shape != (npar, npar) or np.isnan(self.coefficients).any() or np.isnan(self.vcov).any()
                     or npar > basis.shape[1]):
@@ -350,7 +350,7 @@ class CrossPred:
     
     def _create_crossbasis_prediction_matrix(self, predvar: np.ndarray, predlag: np.ndarray) -> np.ndarray:
         """Create prediction matrix for cross-basis (rows VAR-outer, LAG-inner; columns v*n_lag_basis + l)."""
-        at = self._at_matrix if self._at_matrix is not None else np.asarray(predvar, dtype=float)
+        at = self._at_matrix if self._at_matrix is not None else asfloat(predvar)
         x_pred = mkxpred(self.basis, at, predlag, self.cen)
         return x_pred.reshape(x_pred.shape[0] * x_pred.shape[1], x_pred.shape[2])
     

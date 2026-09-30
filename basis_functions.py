@@ -9,70 +9,71 @@ import numpy as np
 from typing import Union, Optional, List, Tuple, Any, Dict
 import warnings
 
+from rbridge import r_locked, r_session
+from utils import asfloat
+
 # R-compatible splines implementation - REQUIRED
 try:
     import rpy2.robjects as robjects
-    from rpy2.robjects import numpy2ri
     from rpy2.robjects.packages import importr
-    from rpy2.robjects.conversion import localconverter
-    
+
     # Load R's splines package
-    splines = importr('splines')
+    with r_session():
+        splines = importr('splines')
     HAS_RPY2 = True
 except ImportError:
     HAS_RPY2 = False
 
 
-_R_SCRATCH = None
+def _new_scratch():
+    """A fresh private R environment (child of baseenv) for the temporaries of one spline call: nothing is written
+    into the user's global environment, user-defined R objects or functions cannot mask the ones used here, and no
+    state is shared between calls (or threads). Call it, and use the environment, inside ``r_session()``."""
+    return robjects.baseenv['new.env'](parent=robjects.baseenv)
 
 
-def _r_scratch():
-    """Private R environment (child of baseenv) for the temporaries of the spline calls: nothing is written into
-    the user's global environment and user-defined R objects or functions cannot mask the ones used here."""
-    global _R_SCRATCH
-    if _R_SCRATCH is None:
-        _R_SCRATCH = robjects.r('new.env(parent = baseenv())')
-    return _R_SCRATCH
+def _r_eval(code: str, env):
+    """Evaluate R code in the scratch environment ``env``."""
+    return robjects.baseenv['eval'](robjects.baseenv['parse'](text=code), env)
 
 
-def _r_eval(code: str):
-    """Evaluate R code in the private scratch environment."""
-    return robjects.baseenv['eval'](robjects.baseenv['parse'](text=code), _r_scratch())
-
-
-def _eval_r_spline(r_call: str):
+def _eval_r_spline(r_call: str, env):
     """Evaluate an R ``splines::ns()``/``splines::bs()`` call (arguments ``x``, ``ik``, ``bk`` in the scratch
-    environment).
+    environment ``env``).
 
     Returns ``(basis, interior_knots, boundary_knots)`` where the knots are the ones R actually used, also when it
     derived them from the data through ``df=``. R's ``onebasis()`` keeps them as attributes of the basis and
     ``crossbasis()``/``mkXpred()`` rebuild the identical basis at new x from them. Under the numpy2ri converter the
     attributes of an R result are lost, so the R object is held in the scratch environment and read back.
-    Must be called inside a ``localconverter(default + numpy2ri)`` context.
+    Must be called inside ``r_session(numpy=True)``.
     """
-    _r_eval(f'res <- {r_call}')
-    basis = np.array(_r_eval('unclass(res)'))
-    knots = np.atleast_1d(np.asarray(_r_eval('as.numeric(attr(res, "knots"))'), dtype=float))
-    boundary = np.atleast_1d(np.asarray(_r_eval('as.numeric(attr(res, "Boundary.knots"))'), dtype=float))
+    _r_eval(f'res <- {r_call}', env)
+    basis = np.array(_r_eval('unclass(res)', env))
+    knots = np.atleast_1d(np.asarray(_r_eval('as.numeric(attr(res, "knots"))', env), dtype=float))
+    boundary = np.atleast_1d(np.asarray(_r_eval('as.numeric(attr(res, "Boundary.knots"))', env), dtype=float))
     return basis, knots, boundary
 
 
 def _as_vector(values) -> np.ndarray:
     """A 1-d float array from a scalar, a 0-d array, a list/tuple/Series or an array (R: a length-1 numeric is a
-    vector, so a scalar knot / threshold / break is a valid argument)."""
-    return np.atleast_1d(np.asarray(values, dtype=float)).ravel()
+    vector, so a scalar knot / threshold / break is a valid argument). Masked / nullable cells become NaN."""
+    return np.atleast_1d(asfloat(values)).ravel()
 
 
+@r_locked(numpy=True)
 def _r_spline_basis(fun: str, x, df, knots, degree, intercept, boundary_knots):
     """``splines::ns()`` (``fun='ns'``) or ``splines::bs()`` (``fun='bs'``) evaluated by R, with R's own defaults.
 
     ``df`` and ``knots`` are forwarded only when given (R: ``df = NULL, knots = NULL``, i.e. no interior knots when
     neither is supplied), and so is ``Boundary.knots`` (R: ``range(x)``, or ``x * c(7, 9) / 8`` for a single
     non-missing x). Returns ``(basis, interior_knots, boundary_knots)`` as used by R.
+
+    The R evaluation runs under the process-wide R lock (see ``rbridge``) in a scratch environment of its own, so
+    concurrent callers (threads) cannot see each other's ``x`` / knots / result.
     """
-    x = np.asarray(x, dtype=float)
-    with localconverter(robjects.default_converter + numpy2ri.converter):
-        scratch = _r_scratch()
+    x = asfloat(x)
+    scratch = _new_scratch()
+    try:
         scratch['x'] = x
         args = []
         if knots is not None:
@@ -86,7 +87,39 @@ def _r_spline_basis(fun: str, x, df, knots, degree, intercept, boundary_knots):
         if boundary_knots is not None:
             scratch['bk'] = _as_vector(boundary_knots)
             args.append('Boundary.knots=bk')
-        return _eval_r_spline(f'splines::{fun}(x, {", ".join(args)})')
+        return _eval_r_spline(f'splines::{fun}(x, {", ".join(args)})', scratch)
+    finally:
+        del scratch                              # released inside the R lock
+
+
+@r_locked(numpy=True)
+def _r_spline_design(x: np.ndarray, knots: np.ndarray, degree: int) -> np.ndarray:
+    """R's ``splines::splineDesign(knots, x, degree + 1, x * 0, TRUE)`` (the design matrix of ``ps()``), evaluated
+    under the R lock in a scratch environment of its own."""
+    scratch = _new_scratch()
+    try:
+        scratch['x'] = x
+        scratch['knots'] = knots
+        return np.array(_r_eval(f'unclass(suppressWarnings(splines::splineDesign(knots, x, {degree + 1}, x * 0, '
+                                f'TRUE)))', scratch))
+    finally:
+        del scratch
+
+
+@r_locked(numpy=True)
+def _r_cr_design(x: np.ndarray, knots: np.ndarray, k: int) -> Tuple[np.ndarray, np.ndarray]:
+    """Design matrix and penalty of mgcv's cubic regression spline (``cr()``): R's
+    ``smooth.construct.cr.smooth.spec(s(x, bs = "cr", k = k), data = list(x = x), knots = list(x = knots))``,
+    evaluated under the R lock in a scratch environment of its own."""
+    scratch = _new_scratch()
+    try:
+        scratch['x'] = x
+        scratch['knots'] = knots
+        _r_eval(f'oo <- mgcv::smooth.construct.cr.smooth.spec(mgcv::s(x, bs = "cr", k = {k}), '
+                f'data = list(x = x), knots = list(x = knots))', scratch)
+        return np.array(_r_eval('unclass(oo$X)', scratch)), np.array(_r_eval('unclass(oo$S[[1]])', scratch))
+    finally:
+        del scratch
 
 
 def _r_colon(start, end) -> np.ndarray:
@@ -100,6 +133,7 @@ def _r_format(values: np.ndarray) -> np.ndarray:
     return np.array([('%.15g' % (v + 0.0)) if not np.isnan(v) else 'NA' for v in values], dtype=object)
 
 
+@r_locked
 def _require_r_package(package: str):
     """Raise ImportError unless the R package can be loaded (used for mgcv, needed by the 'cr' basis)."""
     if not HAS_RPY2:
@@ -176,7 +210,7 @@ class LinearBasis(BaseBasisFunction):
         np.ndarray
             Linear basis matrix
         """
-        x = np.asarray(x, dtype=float)
+        x = asfloat(x)
         
         if self.intercept:
             basis = np.column_stack([np.ones(len(x)), x])
@@ -229,7 +263,7 @@ class PolynomialBasis(BaseBasisFunction):
         np.ndarray
             Polynomial basis matrix
         """
-        x = np.asarray(x, dtype=float)
+        x = asfloat(x)
         
         # R: if(missing(scale)) scale <- max(abs(x), na.rm=TRUE)  (-Inf for an all-missing x, with a warning)
         if self.scale is None:
@@ -556,7 +590,7 @@ class ThresholdBasis(BaseBasisFunction):
         np.ndarray
             Threshold basis matrix
         """
-        x = np.asarray(x, dtype=float)
+        x = asfloat(x)
         
         # R: thr.value <- if(is.null(thr.value)) median(x, na.rm=FALSE) else sort(thr.value)
         if self.thr_value is None:
@@ -639,7 +673,7 @@ class IntegerBasis(BaseBasisFunction):
         np.ndarray
             Indicator matrix (NaN rows for missing or unlisted x)
         """
-        x = np.asarray(x, dtype=float)
+        x = asfloat(x)
 
         # R: levels <- if(!missing(values)) values else sort(unique(x))   (sort() drops the missing values)
         levels = self.values if self.values is not None else np.unique(x[~np.isnan(x)])
@@ -703,7 +737,7 @@ class PSplineBasis(BaseBasisFunction):
         self.degree = degree
         self.intercept = bool(intercept)
         self.fx = bool(fx)
-        self.S = None if S is None else np.atleast_2d(np.asarray(S, dtype=float))
+        self.S = None if S is None else np.atleast_2d(asfloat(S))
         self.diff = diff
         self.attributes['fun'] = 'ps'
         self._check_rpy2()
@@ -717,7 +751,7 @@ class PSplineBasis(BaseBasisFunction):
             )
 
     def __call__(self, x: np.ndarray, **kwargs) -> np.ndarray:
-        x = np.asarray(x, dtype=float)
+        x = asfloat(x)
         observed_range = (np.nanmin(x), np.nanmax(x)) if np.any(~np.isnan(x)) else (np.inf, -np.inf)
         nax = np.isnan(x)
         xx = x[~nax]
@@ -746,12 +780,7 @@ class PSplineBasis(BaseBasisFunction):
             warnings.warn('all obs expected within inner df-degree+int knots')
 
         # TRANSFORMATION: R's splineDesign(knots, x, degree + 1, x * 0, TRUE)
-        with localconverter(robjects.default_converter + numpy2ri.converter):
-            scratch = _r_scratch()
-            scratch['x'] = xx
-            scratch['knots'] = np.asarray(knots, dtype=float)
-            design = np.array(_r_eval(f'unclass(suppressWarnings(splines::splineDesign(knots, x, {degree + 1}, '
-                                      f'x * 0, TRUE)))'))
+        design = _r_spline_design(xx, np.asarray(knots, dtype=float), degree)
         basis = design.reshape(len(xx), -1)
         if not intercept:
             basis = basis[:, 1:]
@@ -813,12 +842,12 @@ class CRSplineBasis(BaseBasisFunction):
         self.knots = None if knots is None else _as_vector(knots)
         self.intercept = bool(intercept)
         self.fx = bool(fx)
-        self.S = None if S is None else np.atleast_2d(np.asarray(S, dtype=float))
+        self.S = None if S is None else np.atleast_2d(asfloat(S))
         self.attributes['fun'] = 'cr'
 
     def __call__(self, x: np.ndarray, **kwargs) -> np.ndarray:
         _require_r_package('mgcv')
-        x = np.asarray(x, dtype=float)
+        x = asfloat(x)
         nax = np.isnan(x)
         xx = x[~nax]
         not_intercept = int(not self.intercept)
@@ -839,14 +868,7 @@ class CRSplineBasis(BaseBasisFunction):
             xx = np.concatenate([np.linspace(knots.min(), knots.max(), len(knots)), xx])
 
         # TRANSFORMATION: CALL FUNCTION FROM MGCV
-        with localconverter(robjects.default_converter + numpy2ri.converter):
-            scratch = _r_scratch()
-            scratch['x'] = xx
-            scratch['knots'] = np.asarray(knots, dtype=float)
-            _r_eval(f'oo <- mgcv::smooth.construct.cr.smooth.spec(mgcv::s(x, bs = "cr", k = {df + not_intercept}), '
-                    f'data = list(x = x), knots = list(x = knots))')
-            design = np.array(_r_eval('unclass(oo$X)'))
-            penalty = np.array(_r_eval('unclass(oo$S[[1]])'))
+        design, penalty = _r_cr_design(xx, np.asarray(knots, dtype=float), df + not_intercept)
         basis = design.reshape(len(xx), -1)
         if not self.intercept:
             basis = basis[:, 1:]

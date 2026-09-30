@@ -11,6 +11,7 @@ from typing import Union, Optional, Dict, Any, Tuple, List
 import warnings
 
 from basis import CrossBasis
+from rbridge import r_session
 
 
 class DLNMGLMInterface:
@@ -132,7 +133,8 @@ class DLNMGLMInterface:
         if self.rpy2_interface is None or self.rpy2_interface.r_model is None:
             return "No model fitted yet"
         
-        return str(self.rpy2_interface.get_model_summary())
+        with r_session():                        # printing an R object calls R: serialised, explicit converter
+            return str(self.rpy2_interface.get_model_summary())
     
     def crossreduce(self, cen: Optional[float] = None, type: str = "overall", **kwargs):
         """

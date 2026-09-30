@@ -14,7 +14,7 @@ from basis_functions import (
     LinearBasis, PolynomialBasis, SplineBasis, BSplineBasis, 
     StrataBasis, ThresholdBasis, IntegerBasis, PSplineBasis, CRSplineBasis, BaseBasisFunction
 )
-from utils import mklag, seqlag
+from utils import asfloat, mklag, seqlag
 from model_utils import validate_model_compatibility
 
 
@@ -158,7 +158,8 @@ class OneBasis:
 
     def __init__(self, x: Union[np.ndarray, List], fun: Union[str, Callable] = 'ns', **kwargs):
         # Store original input (R: x <- as.vector(x), i.e. a matrix is flattened column by column)
-        self.x = np.asarray(x, dtype=float).flatten(order='F')
+        # (a masked cell is a missing one: NaN, as R's NA)
+        self.x = asfloat(x).flatten(order='F')
         self.fun = fun
         # R: range(x, na.rm=TRUE) (c(Inf, -Inf), with a warning, when there is no observed value)
         observed = self.x[~np.isnan(self.x)]
@@ -269,7 +270,7 @@ class OneBasis:
             if self.attributes.get(attr) is not None:
                 value = self.attributes[attr]
                 if attr in self._VECTOR_ARGS:
-                    value = np.atleast_1d(np.asarray(value, dtype=float))
+                    value = np.atleast_1d(asfloat(value))
                 args[keyword] = value
         return args
 
@@ -377,7 +378,7 @@ class CrossBasis:
                  **kwargs):
         
         # Convert x to matrix
-        self.x = np.asarray(x, dtype=float)
+        self.x = asfloat(x)                        # a masked cell is a missing one: NaN, as R's NA
         if self.x.ndim == 1:
             self.x = self.x.reshape(-1, 1)
         

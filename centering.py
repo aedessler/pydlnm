@@ -12,6 +12,7 @@ import warnings
 
 from basis import CrossBasis
 from prediction import CrossPred
+from utils import asfloat
 
 
 def find_mmt_blup(x: np.ndarray,
@@ -56,9 +57,9 @@ def find_mmt_blup(x: np.ndarray,
     """
     from basis import OneBasis
     
-    x = np.asarray(x, dtype=float).ravel()
+    x = asfloat(x).ravel()                      # masked / nullable cells are missing values (NaN)
     x = x[~np.isnan(x)]
-    blup_coef = np.asarray(blup_coef, dtype=float).ravel()
+    blup_coef = asfloat(blup_coef).ravel()
     
     # Prediction grid: percentiles of x (R: quantile, type 7)
     percentiles = np.arange(percentile_range[0], percentile_range[1] + 1)

@@ -7,6 +7,7 @@ including lag parameter validation, sequence generation, and exposure history co
 
 import math
 import numpy as np
+import pandas as pd
 from typing import Union, List, Tuple, Optional, Any
 import warnings
 
@@ -17,6 +18,70 @@ def warn_experimental(feature: str) -> None:
         f"{feature} is experimental: it has no validated R counterpart in dlnm and has known open issues "
         "(see README, 'Experimental modules'). Do not rely on it for published analyses.",
         UserWarning, stacklevel=3)
+
+
+_ARRAY_LIKES = (np.ndarray, pd.Series, pd.Index, pd.DataFrame)       # elements of a list that may carry missing cells
+
+
+def _object_to_float(obj: np.ndarray) -> np.ndarray:
+    """Float array from an object array whose missing cells are None / NaN / pd.NA / NaT."""
+    return np.where(pd.isna(obj), np.nan, obj).astype(float)
+
+
+def asfloat(values, copy: bool = False) -> np.ndarray:
+    """
+    ``np.asarray(values, dtype=float)`` that keeps the missing cells of the input as NaN (R's ``NA``).
+
+    Every public entry point of PyDLNM reads user data through this helper, so that a masked array or a nullable
+    pandas column behaves exactly like the same data coded with NaN:
+
+    * ``numpy.ma.MaskedArray`` (netCDF4 / xarray ``to_masked_array()`` / ``np.ma.masked_where``): the masked cells
+      become NaN. ``np.asarray(masked, dtype=float)`` returns the raw data under the mask (a fill value such as
+      9.96921e36 or -9999, or a genuine-looking number) and so turns missing cells into observations. The caller's
+      array is never modified.
+    * pandas ``Series`` / ``Index`` / ``DataFrame`` / extension arrays with a nullable dtype (``Int64``, ``Float64``,
+      ``boolean``, ``pd.NA``), and object containers holding ``None`` / ``pd.NA``: missing values become NaN.
+    * anything else: ``np.asarray(values, dtype=float)`` (an array that is already float is returned as it is).
+
+    Parameters
+    ----------
+    values : array-like
+        Numeric data of any shape
+    copy : bool, default False
+        Always return a new array (the result never shares memory with ``values``)
+
+    Returns
+    -------
+    np.ndarray
+        Float array of the shape of ``values``
+
+    Raises
+    ------
+    ValueError, TypeError
+        If a value that is not missing cannot be converted to float (as ``np.asarray(dtype=float)``)
+    """
+    if isinstance(values, np.ma.MaskedArray):
+        mask = np.ma.getmaskarray(values)
+        data = np.ma.getdata(values)
+        if data.dtype.kind in 'OUS' and mask.any():          # a placeholder under the mask that is not a number
+            data = data.astype(object)
+            data[mask] = np.nan
+        out = np.array(data, dtype=float)                     # a copy: the caller's masked array is never touched
+        out[mask] = np.nan
+        return out
+    if isinstance(values, (pd.Series, pd.Index, pd.DataFrame, pd.api.extensions.ExtensionArray)):
+        try:
+            out = values.to_numpy(dtype=float, na_value=np.nan)   # copies when there is a missing value to replace
+        except TypeError:                                     # an object column holding pd.NA
+            out = _object_to_float(values.to_numpy(dtype=object))
+    else:
+        if isinstance(values, (list, tuple)) and any(isinstance(v, _ARRAY_LIKES) for v in values):
+            values = [asfloat(v) for v in values]             # e.g. a list of masked arrays or of nullable Series
+        try:
+            out = np.asarray(values, dtype=float)
+        except TypeError:                                     # pd.NA inside an object array or a list
+            out = _object_to_float(np.array(values, dtype=object))
+    return np.array(out, dtype=float, copy=True) if copy else out
 
 
 def mklag(lag: Union[int, List[int], Tuple[int, ...], np.ndarray]) -> np.ndarray:
@@ -137,7 +202,7 @@ def pretty(x, n=5, min_n=None, shrink_sml=0.75, high_u_bias=1.5, u5_bias=None, e
     (mkcen) of crosspred. Agrees with R to rounding error (3005 of 3006 random ranges and n tested); only
     degenerate ranges narrower than ~1e-13 relative to their magnitude can differ in length.
     """
-    x = np.asarray(x, dtype=float)
+    x = asfloat(x)
     x = x[np.isfinite(x)]
     if x.size == 0:
         return x
@@ -239,7 +304,7 @@ def lagmatrix(values: Union[np.ndarray, List[float]], lags: Union[np.ndarray, Li
     A positive lag uses past values (the first rows are NaN), a negative lag uses future values (the last rows
     are NaN). Raises, like R, when the largest absolute lag is not smaller than the series length.
     """
-    values = np.asarray(values, dtype=float).ravel()
+    values = asfloat(values).ravel()
     lags = np.atleast_1d(np.asarray(lags)).astype(int)
     n = len(values)
     if lags.size == 0:
@@ -296,7 +361,7 @@ def exphist(exposure: Union[np.ndarray, List[float]],
            [4., 3., 2., 1.],
            [5., 4., 3., 2.]])
     """
-    exposure = np.asarray(exposure, dtype=float).ravel()
+    exposure = asfloat(exposure).ravel()
     n = len(exposure)
     
     # R: lag <- if(missing(lag)) c(0, length(exp)-1) else mklag(lag)
@@ -306,7 +371,7 @@ def exphist(exposure: Union[np.ndarray, List[float]],
     if times is None:
         times = np.arange(1, n + 1)
     else:
-        times = np.round(np.atleast_1d(np.asarray(times, dtype=float)).ravel())
+        times = np.round(np.atleast_1d(asfloat(times)).ravel())
         if times.size == 0 or not np.all(np.isfinite(times)):
             raise ValueError("'times' must be a non-empty vector of finite values")
         times = times.astype(np.int64)
@@ -384,7 +449,7 @@ def equalknots(x: np.ndarray,
         If the arguments define no knots (``nk < 1``; ns: ``df - 1 - intercept``, bs: ``df - degree - intercept``,
         strata: ``df - intercept`` knots), or ``fun`` is not one of "ns", "bs", "strata".
     """
-    x = np.asarray(x, dtype=float).ravel()
+    x = asfloat(x).ravel()
     x_clean = x[~np.isnan(x)]
     
     if len(x_clean) == 0:
@@ -445,7 +510,7 @@ def logknots(x: Union[int, List[int], np.ndarray],
     >>> logknots(21, df=3)  # R: logknots(21, df=3)
     array([1.01119306, 2.77947331, 7.63995648])
     """
-    x = np.asarray(x, dtype=float).ravel()
+    x = asfloat(x).ravel()
     
     # If length of x is 1 or 2, interpret as lag range, otherwise take the range (R: range(x, na.rm=TRUE))
     if len(x) < 3:

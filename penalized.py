@@ -13,7 +13,7 @@ from typing import Optional, Union, Dict, Tuple, Any, List
 import warnings
 
 from basis import CrossBasis, OneBasis
-from utils import warn_experimental
+from utils import asfloat, warn_experimental
 from enhanced_splines import bs_enhanced, ns_enhanced
 
 
@@ -230,12 +230,12 @@ class PenalizedDLNM:
             Fitted model object
         """
         
-        y = np.asarray(y)
+        y = asfloat(y)                             # masked / nullable cells are missing values (NaN)
         X_basis = self.basis.basis
         
         # Combine basis with extra covariates
         if X_extra is not None:
-            X_extra = np.asarray(X_extra)
+            X_extra = asfloat(X_extra)
             if X_extra.ndim == 1:
                 X_extra = X_extra.reshape(-1, 1)
             X_full = np.column_stack([X_basis, X_extra])
@@ -469,7 +469,7 @@ class PenalizedDLNM:
         if self.coefficients is None:
             raise ValueError("Model has not been fitted")
         
-        X_new = np.asarray(X_new)
+        X_new = asfloat(X_new)
         predictions = X_new @ self.coefficients
         
         # Prediction standard errors

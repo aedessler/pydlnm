@@ -11,7 +11,7 @@ import pandas as pd
 from typing import Optional, Union, List, Tuple, Dict, Any
 from datetime import datetime, date
 import warnings
-from utils import warn_experimental
+from utils import asfloat, warn_experimental
 
 from basis_functions import SplineBasis, BSplineBasis
 from enhanced_splines import ns_enhanced
@@ -385,7 +385,7 @@ def seasonal_decomposition(time_series: np.ndarray,
     warn_experimental("seasonal_decomposition")
     from sklearn.linear_model import LinearRegression
     
-    time_series = np.asarray(time_series)
+    time_series = asfloat(time_series)         # masked / nullable cells are missing values (NaN)
     valid_mask = ~np.isnan(time_series)
     
     if not np.any(valid_mask):

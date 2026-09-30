@@ -31,15 +31,16 @@ How the tests are built
   (parent) process.  All children are started together on first use and run concurrently (hard cap CHILD_TIMEOUT s
   wall clock), so `-k` does not make a single test cheaper.
 
-Tests decorated with @known_defect assert the R-faithful outcome (every result equals R's) and fail today (strict
-xfail: when the fix lands they XPASS and the marker must be removed).  The plain tests are guards for the usage patterns
-that already work: serial, one worker thread, four worker threads behind ONE external lock (proof that the shared
-scratch environment / unserialised R access is the cause), a one-worker GLM once the rpy2 converter is copied into the
-thread, and spawned worker processes (the documented escape hatch: 'use processes').
+Status: fixed (these tests used to be strict xfails).  Every piece of R access of PyDLNM (basis evaluation, the GLM
+interfaces, package checks) runs in rbridge.r_session: one process-wide re-entrant lock plus an explicit rpy2 converter
+(no implicit, main-thread-only one), and the scratch environment of the spline calls is private to each call.  The
+threaded tests assert that every result equals R's; the guards pin the usage patterns that worked before (serial, one
+worker thread, four worker threads behind ONE external lock, a one-worker GLM once the rpy2 converter is copied into
+the thread, and spawned worker processes).
 
-PYDLNM_XFAIL_OFF=1 shows the raw failures.  Validation of the expectations: against a copy of the modules in which every
-R-touching function is wrapped in one RLock plus localconverter(default_converter) (ns / bs / ps / cr evaluation,
-_require_r_package, the GLM interface methods) all tests pass (PYDLNM_SRC=<copy> PYDLNM_XFAIL_OFF=1).
+Validation of the expectations: against a copy of the modules in which every R-touching function is wrapped in one
+RLock plus localconverter(default_converter) (ns / bs / ps / cr evaluation, _require_r_package, the GLM interface
+methods) all tests pass (PYDLNM_SRC=<copy>).
 """
 import json
 import os
@@ -53,9 +54,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from rhelpers import chicago, known_defect, max_rel_diff, np2r, r, rget
+from rhelpers import chicago, max_rel_diff, np2r, r, rget
 
-KEY = 'thread_unsafe_shared_r_scratch'
 TESTS_DIR = str(Path(__file__).resolve().parent)
 CHILD_TIMEOUT = 40.0          # s, wall clock from the moment all children were started
 SERIES_LEN = 400              # days per series: long enough for the explicit knots below to lie inside every range
@@ -502,20 +502,15 @@ def assert_child_matches_r(child_name, job_name, ref_name=None, rtol=RTOL):
         pytest.fail(f'[{child_name}/{job_name}] ' + '; '.join(parts))
 
 
-DEFECT_NOTE = ('module-level _R_SCRATCH / unserialised rpy2 calls: concurrent threads get wrong bases, exceptions or '
-               'crash')
-
-
 # --------------------------------------------------------------------------------------------------------------
 # bases built concurrently: four worker threads, no synchronisation (what joblib/dask/ThreadPoolExecutor users do)
 # --------------------------------------------------------------------------------------------------------------
 @pytest.mark.parametrize('name', list(SPECS))
-def test_bases_built_in_four_threads_equal_r(name, request):
+def test_bases_built_in_four_threads_equal_r(name):
     """32 distinct series x 3 passes through OneBasis (ns df / ns knots / bs df / bs knots / ps / cr) or CrossBasis
     (bs x ns, lag 7) on a 4-worker ThreadPoolExecutor: every matrix and every knots / boundary-knots / penalty attribute
-    equals R's onebasis() / crossbasis() for the same series.  Today a share of the results belongs to another thread's
-    series (or an exception / crash)."""
-    request.applymarker(known_defect('GAP', KEY, note=DEFECT_NOTE))       # (pytest.param cannot carry the no-op mark)
+    equals R's onebasis() / crossbasis() for the same series.  (With an unserialised shared scratch environment a share
+    of the results belongs to another thread's series, or raises, or kills the process.)"""
     assert_child_matches_r(f'unsafe/{name}', name)
 
 
@@ -536,12 +531,10 @@ def test_guard_bases_equal_r(child, name):
 
 
 @pytest.mark.parametrize('name', ['cr', 'crossbasis_cr'])
-def test_cr_basis_in_one_worker_thread_equals_r(name, request):
+def test_cr_basis_in_one_worker_thread_equals_r(name):
     """The mgcv-based 'cr' basis (OneBasis, or as the argvar of a CrossBasis) in ONE worker thread, nothing concurrent:
-    R's numbers expected.  Today every call raises NotImplementedError ('Conversion rules for rpy2.robjects appear to be
-    missing'): _require_r_package() evaluates robjects.r(...) outside a localconverter, unlike ns / bs / ps."""
-    request.applymarker(known_defect('GAP', KEY + '_cr', note='basis_functions._require_r_package uses the implicit '
-                                                              'rpy2 converter: cr raises in every non-main thread'))
+    R's numbers expected.  (_require_r_package() used to evaluate robjects.r(...) outside a localconverter and raised
+    NotImplementedError 'Conversion rules for rpy2.robjects appear to be missing' in every non-main thread.)"""
     assert_child_matches_r('plain/cr', name)
 
 
@@ -554,11 +547,10 @@ def test_glm_first_stage_serial_equals_r():
     assert_child_matches_r('glm/serial', 'city', rtol=RTOL_GLM)
 
 
-@known_defect('GAP', KEY, note='GLM interfaces use the implicit rpy2 converter: NotImplementedError in every '
-                               'non-main thread')
 def test_glm_first_stage_in_one_worker_thread_equals_r():
-    """ONE worker thread, nothing concurrent: ImprovedGLMInterface must give R's numbers (today every call raises
-    NotImplementedError 'Conversion rules for rpy2.robjects appear to be missing')."""
+    """ONE worker thread, nothing concurrent: ImprovedGLMInterface must give R's numbers (it used to raise
+    NotImplementedError 'Conversion rules for rpy2.robjects appear to be missing' in every non-main thread: the
+    interfaces relied on the implicit, main-thread-only rpy2 converter)."""
     assert_child_matches_r('glm/one_worker_plain', 'city', rtol=RTOL_GLM)
 
 
@@ -569,13 +561,41 @@ def test_glm_first_stage_in_one_worker_thread_with_converter_equals_r():
     assert_child_matches_r('glm/one_worker_converter', 'city', rtol=RTOL_GLM)
 
 
-@known_defect('GAP', KEY, note=DEFECT_NOTE)
 def test_glm_first_stage_in_four_threads_equals_r():
     """Four worker threads (converter copied into each), eight cities, no synchronisation: coefficients must be R's
-    (today silently wrong for some cities, R errors, or the process dies)."""
+    (they used to be silently wrong for some cities, or R errored, or the process died)."""
     assert_child_matches_r('glm/four_unsafe', 'city', rtol=RTOL_GLM)
 
 
 def test_glm_first_stage_in_four_threads_behind_one_lock_equals_r():
     """Guard: the same four threads with the whole per-city computation under ONE external lock reproduce R."""
     assert_child_matches_r('glm/four_locked', 'city', rtol=RTOL_GLM)
+
+
+def test_r_session_is_reentrant_and_restores_the_callers_converter():
+    """In-process check of the building block: nested sessions (the lock is re-entrant, so R sections can call R
+    sections) leave the converter of the caller exactly as it was, and a worker thread that never set a converter
+    can run R code through a session."""
+    import threading
+    from rpy2.robjects import conversion
+    from rbridge import r_session
+    before = conversion.get_conversion()
+    with r_session():
+        with r_session(numpy=True):
+            with r_session():
+                assert float(r('1 + 1')[0]) == 2.0
+    assert conversion.get_conversion() is before
+
+    result = {}
+
+    def worker():
+        try:
+            with r_session():
+                result['value'] = float(r('sqrt(16)')[0])
+        except BaseException as exc:                              # noqa: BLE001
+            result['error'] = repr(exc)
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    thread.join(30)
+    assert result == {'value': 4.0}, result
