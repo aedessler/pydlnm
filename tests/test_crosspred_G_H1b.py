@@ -443,7 +443,6 @@ def _r_seqlag(lag, by):
     return rget(f'dlnm:::seqlag(c({lag[0]},{lag[1]}), by={by!r})')
 
 
-@known_defect('H1a', 'validation-audit-7', note='seqlag uses np.arange(lag0, lag1+by, by): adds a value above the upper lag')
 @pytest.mark.parametrize('lag,by', _SEQLAG_BAD, ids=lambda v: str(v).replace(' ', ''))
 def test_seqlag_never_exceeds_upper_lag(lag, by):
     from utils import seqlag
@@ -457,7 +456,6 @@ def test_seqlag_matches_R_when_step_divides_range(lag, by):
 
 
 # make_cb's lag basis has explicit Boundary.knots = lag range, so only the lag GRID can differ between R and Python.
-@known_defect('H1a', 'validation-audit-7', note='bylag that does not divide the lag range gives an extra lag column past max lag')
 @pytest.mark.parametrize('bylag', [0.3, 0.4, 2.0])
 def test_bylag_columns_match_R(bylag):
     check(make_cb('ns'), at=AT, cen=CEN, bylag=bylag)

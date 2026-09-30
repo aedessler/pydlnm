@@ -51,20 +51,21 @@ def mklag(lag: Union[int, List[int], Tuple[int, ...], np.ndarray]) -> np.ndarray
     # Validate input
     if lag.size == 0:
         raise ValueError("lag cannot be empty")
+    if lag.size > 2:
+        raise ValueError("lag must have 1 or 2 elements")
+    if lag.dtype.kind not in 'iuf':
+        raise TypeError("'lag' must be a numeric vector of length 2 or 1")
+    lag = lag.astype(float).flatten()
+    if not np.all(np.isfinite(lag)):
+        raise ValueError("missing or infinite value in 'lag'")
     
     if lag.size == 1:
-        lag_val = lag.item()
-        if lag_val >= 0:
-            return np.array([0, lag_val])
-        else:
-            return np.array([lag_val, 0])
-    elif lag.size == 2:
-        lag_array = lag.flatten()
-        if lag_array[0] > lag_array[1]:
-            raise ValueError(f"min_lag ({lag_array[0]}) must be <= max_lag ({lag_array[1]})")
-        return lag_array
-    else:
-        raise ValueError("lag must have 1 or 2 elements")
+        lag = np.array([lag[0], 0.0]) if lag[0] < 0 else np.array([0.0, lag[0]])
+    if lag[0] > lag[1]:
+        raise ValueError(f"min_lag ({lag[0]:g}) must be <= max_lag ({lag[1]:g})")
+    
+    # R: round(lag[1:2]) (halves go to the even integer, as numpy does)
+    return np.round(lag).astype(np.int64)
 
 
 def seqlag(lag: Union[np.ndarray, List[int], Tuple[int, ...]], 
@@ -92,11 +93,28 @@ def seqlag(lag: Union[np.ndarray, List[int], Tuple[int, ...]],
     >>> seqlag([0, 5], by=0.5)
     array([0. , 0.5, 1. , 1.5, 2. , 2.5, 3. , 3.5, 4. , 4.5, 5. ])
     """
-    lag = np.asarray(lag)
+    lag = np.asarray(lag, dtype=float)
     if lag.size != 2:
         raise ValueError("lag must have exactly 2 elements")
     
-    return np.arange(lag[0], lag[1] + by, by)
+    # R: seq(from=lag[1], to=lag[2], by=by). seq.default never overshoots 'to': the number of steps is
+    # floor((to - from)/by + 1e-10) and the last value is capped at 'to'.
+    start, stop = float(lag[0]), float(lag[1])
+    delta = stop - start
+    if delta == 0 and stop == 0:
+        return np.array([stop])
+    with np.errstate(divide='ignore', invalid='ignore'):
+        n = delta / by
+    if not np.isfinite(n):
+        if by == 0 and delta == 0:
+            return np.array([start])
+        raise ValueError("invalid '(to - from)/by' in seq")
+    if n < 0:
+        raise ValueError("wrong sign in 'by' argument")
+    if abs(delta) / max(abs(stop), abs(start)) < 100 * np.finfo(float).eps:
+        return np.array([start])
+    values = start + np.arange(int(n + 1e-10) + 1) * by
+    return np.minimum(values, stop) if by > 0 else np.maximum(values, stop)
 
 
 def exphist(exposure: Union[np.ndarray, List[float]], 

@@ -269,14 +269,12 @@ def test_crossbasis_attributes_match_r():
 NONINT_LAGS = [2.5, 3.5, 0.4, 0.6, 5.6, -2.5, [0.4, 5.4], [0.5, 2.5], [1.5, 3.5], [2.6, 7.4]]
 
 
-@known_defect('H1a', 'crossbasis-10', note='mklag returns the unrounded values; R returns round(lag[1:2])')
 @pytest.mark.parametrize('lag', NONINT_LAGS, ids=[str(v) for v in NONINT_LAGS])
 def test_mklag_rounds_noninteger_lags(lag):
     from utils import mklag
     np.testing.assert_array_equal(np.asarray(mklag(lag), dtype=float), r_mklag(lag))
 
 
-@known_defect('H1a', 'crossbasis-10', note='mklag accepts NaN lags; R stops with "missing value where TRUE/FALSE needed"')
 @pytest.mark.parametrize('lag', [[np.nan, 3.0], np.nan], ids=['pair', 'scalar'])
 def test_mklag_rejects_missing_lag(lag):
     from utils import mklag
@@ -285,7 +283,6 @@ def test_mklag_rejects_missing_lag(lag):
         mklag(lag)
 
 
-@known_defect('H1a', 'crossbasis-10', note='non-integer lag range: Python lag set has one extra lag / shifted lags')
 @pytest.mark.parametrize('lag, knot', [(2.5, 1.2), ([0.4, 5.4], 2.5), ([1.5, 6.5], 4.0)],
                          ids=['2.5', '0.4to5.4', '1.5to6.5'])
 def test_crossbasis_noninteger_lag_uses_rounded_lag_range(lag, knot):
@@ -295,7 +292,6 @@ def test_crossbasis_noninteger_lag_uses_rounded_lag_range(lag, knot):
     np.testing.assert_array_equal(np.asarray(cb.lag, dtype=float), ref['lag'])
 
 
-@known_defect('H1a', 'crossbasis-10', note='logknots inherits the unrounded mklag: knots placed on the wrong range')
 @pytest.mark.parametrize('x', [[0, 1.5], 2.5, [0.4, 5.4]], ids=['0to1.5', '2.5', '0.4to5.4'])
 def test_logknots_noninteger_range_is_rounded_first(x):
     from utils import logknots
@@ -335,7 +331,6 @@ def test_logknots_integer_range_matches_r(x, nk):
 OVERSHOOT = [([0, 5], 2), ([0, 5], 0.3), ([0, 3], 0.7), ([0, 6], 4), ([2, 9], 3), ([0, 10], 3), ([0, 1], 0.4)]
 
 
-@known_defect('H1a', 'crossbasis-11', note='np.arange(from, to+by, by) includes a value above lag[2]; R seq() never does')
 @pytest.mark.parametrize('lag, by', OVERSHOOT, ids=[f'{a}by{b}' for a, b in OVERSHOOT])
 def test_seqlag_never_exceeds_upper_lag(lag, by):
     from utils import seqlag
@@ -378,7 +373,6 @@ def _crosspred_r_py(cb, coef, vcov, at, lag, bylag):
     return cp, ref
 
 
-@known_defect('H1a', 'crossbasis-11', note='crosspred(bylag) predicts at lags beyond the cross-basis lag range')
 @pytest.mark.parametrize('lag, bylag', [(None, 4), ([0, 5], 2)], ids=['lag6_by4', 'sub0to5_by2'])
 def test_crosspred_bylag_not_dividing_lag_range_matches_r(lag, bylag):
     cb, coef, vcov, at = _crosspred_bylag_setup()

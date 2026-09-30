@@ -257,7 +257,7 @@ class CrossPred:
         
         # Set names
         self.predvar_names = [str(v) for v in self.predvar]
-        self.lag_names = [f"lag{int(l)}" if l.is_integer() else f"lag{l:.1f}" for l in predlag]
+        self.lag_names = [f"lag{l:.15g}" for l in predlag]   # R: paste0("lag", predlag) (15 significant digits)
         
         # Generate overall and cumulative predictions
         self._generate_overall_predictions()

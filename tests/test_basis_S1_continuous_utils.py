@@ -885,7 +885,6 @@ def test_logknots_nan_in_range_vector_matches_r(x):
     assert msg is None, msg
 
 
-@known_defect(THEME, 'crossbasis-14', note='the lag range is not rounded (R: mklag rounds)')
 @pytest.mark.parametrize('x', [[0.3, 10.7], [0.5, 10.5], [2.2, 20.6], 21.4, 20.8], ids=_sid)
 def test_logknots_non_integer_lag_range_is_rounded_like_r(x):
     """R: mklag() rounds a lag range to integers before the knots are placed."""
