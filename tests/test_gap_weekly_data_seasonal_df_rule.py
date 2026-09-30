@@ -36,8 +36,8 @@ What the audit critic found and what this module establishes
         crosspred).
   * Not asserted: week dates anchored on another weekday (ISO Monday: the calendar years of the dates become 7, df 56;
     R takes `year` from a data column, PyDLNM derives it from the dates); attributable numbers on weekly data
-    (tests/test_attr_*.py).  The mixmeta-only control name `igls.inititer` of code.R is rejected by R's mvmeta too
-    (asserted at the end).
+    (tests/test_attr_*.py).  The mixmeta-only control name `igls.inititer` of code.R is refused by R's mvmeta and accepted
+    by PyDLNM's MVMeta, which serves both vocabularies (asserted at the end).
 
 Tolerances: 1e-8 relative for deterministic quantities; 1e-6 for the BLUPs (the REML optimum is optimiser-limited,
 tests/test_metaanalysis_N.py theme N2; R is run with reltol = 1e-14); 1e-4 against R's default mixmeta control.

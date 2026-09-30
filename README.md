@@ -86,11 +86,18 @@ The audit compared the Python code with R's `dlnm`/`mvmeta` line by line and wit
 - **Model coefficients**: R picks the block of the basis passed out of a model that may hold several bases by the *name of the basis object*, which Python cannot see. `crosspred`/`crossreduce`/`attrdl`/`find_mmt` (and the wrappers) take an optional `name=` (the prefix of the coefficient names of the terms of that basis, or a `name` attribute of the basis). Without it the block is identified by the columns of the basis in the design matrix of the model (statsmodels `model.exog`, the R model of a PyDLNM GLM interface; rows may be dropped, reordered or NaN-filled), then by the names `v1.l1`/`b1`, then as the whole coefficient vector; a basis that is not in the model, or that cannot be identified, raises an error asking for `name=` or explicit `coef=`/`vcov=` (never a guess). The link is detected for statsmodels GLM, discrete, Cox (`PHReg`, log), `ConditionalLogit` (logit), `ConditionalPoisson` (log) and OLS/WLS (identity) models, and a `model_link` you give takes precedence, as in R's `getlink`. `coef`/`vcov` with NaN or the wrong size raise R's "not consistent with basis matrix" error.
 - **`attrdl`** (`attribution.py`) is a port of R's `attrdl` (forward/backward perspective, cases attributed over the lag window, totals rescaled to the observed cases, `range` semantics, simulation). `cen` must be given (or be stored in the basis); `coef`/`vcov` passed without a model are log-scale coefficients. `attr_heat_cold` splits at the centering value by default.
 - **`find_mmt_blup`** follows the Lancet recipe and raises instead of silently returning the median temperature.
+- **`MVMeta` control** accepts the `mixmeta.control()` names next to `mvmeta.control()`'s, as the Europe-2022 script passes them: `igls.inititer` (like `igls.iter`, but `<= 0` means no IGLS iterations), `loglik.iter` (validated; the optimum does not depend on the route), `checkPD` (raises on a within-study covariance with a negative eigenvalue) and `addSlist` (the `S` matrices through `control`; an error if `S` is also given).
+- **`strata(df=)` breaks and the BLUP-based MMT grid** use R's `quantile(type = 7)` arithmetic (`utils.quantile7`), so a break that falls on an observation or an integer lag lands on the same side as in R.
 - **R is not reconfigured by the library any more**: `improved_glm.py`/`rpy2_glm.py` no longer overwrite `R_HOME`, and the spline wrappers no longer write objects into R's global environment.
 
 ## Experimental modules
 
 `penalized.py` (penalized cross-basis / penalized DLNM) and `seasonality.py` have no validated counterpart in R's `dlnm` and have open issues found by the audit (for example the REML criterion and smoothing-parameter selection of `penalized.py`, and the treatment of dates and of the cyclic spline in `seasonality.py`). They warn when used. Do not rely on them for published analyses.
+
+## Known limitations
+
+- **Seasonal df of `ImprovedGLMInterface` assumes a daily series.** It uses the Lancet-2015 rule `dfseas * (number of calendar years)`; a weekly series (Europe 2022) needs `round(dfseas * n_weeks * 7 / 365.25)`. Nothing warns on weekly input, and the packaged route then fits R's model for the daily rule, not the weekly one. For weekly data fit through `Rpy2GLMInterface.fit_glm` with your own `ns(date, df=...)` covariate (this reproduces the Europe first stage exactly; see `tests/test_gap_weekly_data_seasonal_df_rule.py`).
+- **`MVMeta` agrees with R's `mvmeta`/`mixmeta` to about 1e-5**, not to machine precision: R stops its optimiser at `reltol = sqrt(eps)`. Against R run with a tight `reltol` the optimum agrees to 1e-6.
 
 ## Missing values, dates and threads
 
