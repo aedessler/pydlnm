@@ -176,14 +176,18 @@ class CrossPred:
         
         # Extract model information
         if model is not None:
-            model_info = validate_model_compatibility(model, basis.shape[1], self.basis_name)
+            model_info = validate_model_compatibility(model, basis.shape[1], self.basis_name, kind=self.basis_type)
             self.coefficients = model_info['coef']
             self.vcov = model_info['vcov']
             self.model_link = model_info['link'] or model_link
             self.model_class = model_info['class']
         else:
-            self.coefficients = np.asarray(coef)
-            self.vcov = np.asarray(vcov)
+            self.coefficients = np.asarray(coef, dtype=float).ravel()
+            self.vcov = np.atleast_2d(np.asarray(vcov, dtype=float))
+            npar = len(self.coefficients)
+            if (self.vcov.shape != (npar, npar) or np.isnan(self.coefficients).any() or np.isnan(self.vcov).any()
+                    or npar > basis.shape[1]):
+                raise ValueError("coef/vcov not consistent with basis matrix. See help(crosspred)")
             self.model_link = model_link
             self.model_class = 'Unknown'
         
@@ -235,13 +239,9 @@ class CrossPred:
                 raise ValueError(f"Variable basis ({self.variable_basis.shape[1]}) doesn't match coefficients ({coef_len})")
             self.original_basis = basis
         else:
-            # Full coefficients - use normal approach
-            if self.vcov.shape[0] < basis_ncol or self.vcov.shape[1] < basis_ncol:
-                raise ValueError(f"Variance-covariance matrix shape {self.vcov.shape} too small for basis")
-            
-            # Trim to basis size
-            self.coefficients = self.coefficients[:basis_ncol]
-            self.vcov = self.vcov[:basis_ncol, :basis_ncol]
+            # Full coefficients: the coefficients of the basis, one per column (checked above or selected by name)
+            if self.vcov.shape != (basis_ncol, basis_ncol):
+                raise ValueError(f"Variance-covariance matrix shape {self.vcov.shape} not consistent with basis")
         
         # Set prediction parameters
         self.bylag = bylag

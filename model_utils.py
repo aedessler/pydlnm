@@ -5,9 +5,67 @@ This module provides utilities for extracting coefficients, variance-covariance 
 and link functions from various statistical modeling frameworks.
 """
 
+import re
 import numpy as np
-from typing import Any, Optional, Union, Dict
+from typing import Any, Optional, Union, Dict, List, Sequence
 import warnings
+
+
+_LINK_CLASS_NAMES = {'log': 'log', 'logit': 'logit', 'identity': 'identity', 'probit': 'probit',
+                     'cloglog': 'cloglog', 'inversepower': 'inverse', 'inversesquared': 'inverse_squared',
+                     'cauchy': 'cauchy', 'sqrt': 'sqrt'}
+
+
+def _link_name(link: Any) -> Optional[str]:
+    """Name of a link given as a string, an object with .name or a statsmodels link class (Log, Logit, ...)."""
+    if isinstance(link, str):
+        return link.lower()
+    name = getattr(link, 'name', None)
+    if isinstance(name, str):
+        return name.lower()
+    class_name = type(link).__name__.lower()
+    return _LINK_CLASS_NAMES.get(class_name, class_name if link is not None else None)
+
+
+_NAME_PATTERNS = {'cb': re.compile(r'v[0-9]{1,2}\.l[0-9]{1,2}$'), 'one': re.compile(r'b[0-9]{1,2}$')}
+
+
+def coefficient_names(model: Any) -> Optional[List[str]]:
+    """Names of a fitted model's coefficients (pandas index of params, or the design column names), else None."""
+    params = getattr(model, 'params', None)
+    index = getattr(params, 'index', None)
+    if index is not None:
+        return [str(n) for n in index]
+    names = getattr(getattr(model, 'model', None), 'exog_names', None)
+    return [str(n) for n in names] if names is not None else None
+
+
+def basis_block(model: Any, n_coef: int, basis_ncol: int, kind: str = 'cb',
+                basis_name: str = 'basis') -> np.ndarray:
+    """
+    Indices of the cross-basis (or one-basis) block in the coefficient vector of a fitted model.
+
+    R (crosspred, attrdl) selects the block by NAME: the coefficients whose names match ``v<i>.l<j>`` (``b<i>`` for
+    a one-basis). The same is done here when the model carries coefficient names. Without informative names the
+    block is identified only when it is the whole coefficient vector; otherwise a ValueError is raised instead of
+    guessing that the block comes first.
+    """
+    all_idx = np.arange(n_coef)
+    names = coefficient_names(model)
+    pattern = _NAME_PATTERNS.get(kind, _NAME_PATTERNS['cb'])
+    if names is not None and len(names) == n_coef:
+        idx = np.array([i for i, nm in enumerate(names) if pattern.search(nm)], dtype=int)
+        if len(idx) == basis_ncol:
+            return idx
+        if len(idx) > basis_ncol:
+            raise ValueError(
+                f"{len(idx)} coefficients look like cross-basis terms but {basis_name} has {basis_ncol} columns "
+                f"(several bases in the model?): pass coef= and vcov= for the block of {basis_name}")
+    if n_coef == basis_ncol:
+        return all_idx
+    raise ValueError(
+        f"cannot identify the {basis_ncol} coefficients of {basis_name} among the {n_coef} model coefficients "
+        f"(no coefficient names like 'v1.l1'): pass coef= and vcov= for the block of {basis_name}")
 
 
 def getcoef(model: Any, model_class: Optional[str] = None) -> np.ndarray:
@@ -214,15 +272,21 @@ def getlink(model: Any,
         # For quasi-Poisson family, the link is log
         return 'log'
     
-    # Try to extract from family attribute (common in GLMs)
-    if hasattr(model, 'family'):
-        family = model.family
-        if hasattr(family, 'link'):
-            link = family.link
-            if hasattr(link, 'name'):
-                return link.name
-            elif isinstance(link, str):
-                return link
+    # Family attribute (statsmodels GLM results and models): family.link is a link object; R: model$family$link
+    family = getattr(model, 'family', None)
+    if family is None and hasattr(model, 'model'):
+        family = getattr(model.model, 'family', None)
+    if family is not None and hasattr(family, 'link'):
+        name = _link_name(family.link)
+        if name is not None:
+            return name
+    
+    # statsmodels discrete-choice models (results wrapper -> .model): the link is implied by the model class
+    inner_class = type(getattr(model, 'model', None)).__name__
+    discrete_links = {'Poisson': 'log', 'GeneralizedPoisson': 'log', 'NegativeBinomial': 'log',
+                      'NegativeBinomialP': 'log', 'Logit': 'logit', 'Probit': 'probit', 'MNLogit': 'logit'}
+    if inner_class in discrete_links:
+        return discrete_links[inner_class]
     
     # Try direct link attribute
     if hasattr(model, 'link'):
@@ -232,9 +296,8 @@ def getlink(model: Any,
         elif isinstance(link, str):
             return link
     
-    # Model type-specific defaults
+    # Model type-specific defaults (a GLM without a family is left undetermined rather than guessed)
     model_defaults = {
-        'GLM': 'identity',
         'Poisson': 'log',
         'Logit': 'logit',
         'LogisticRegression': 'logit',
@@ -253,9 +316,12 @@ def getlink(model: Any,
 
 def validate_model_compatibility(model: Any, 
                                 basis_ncol: int,
-                                basis_name: str = "basis") -> Dict[str, Any]:
+                                basis_name: str = "basis",
+                                kind: str = "cb") -> Dict[str, Any]:
     """
     Validate that a model is compatible with a basis matrix and extract key information.
+    
+    The coefficients of the basis are selected from the model by name, as R does (see ``basis_block``).
     
     Parameters
     ----------
@@ -265,13 +331,15 @@ def validate_model_compatibility(model: Any,
         Number of columns in the basis matrix
     basis_name : str, default="basis"
         Name of the basis for error messages
+    kind : {"cb", "one"}, default="cb"
+        Basis type, which decides the coefficient name pattern (``v1.l1`` or ``b1``)
         
     Returns
     -------
     dict
         Dictionary containing model information:
-        - 'coef': model coefficients
-        - 'vcov': variance-covariance matrix
+        - 'coef': coefficients of the basis
+        - 'vcov': their variance-covariance matrix
         - 'link': link function
         - 'class': model class name
         
@@ -283,26 +351,25 @@ def validate_model_compatibility(model: Any,
     model_class = type(model).__name__
     
     try:
-        coef = getcoef(model, model_class)
-        vcov = getvcov(model, model_class)
+        coef = np.asarray(getcoef(model, model_class), dtype=float)
+        vcov = np.asarray(getvcov(model, model_class), dtype=float)
         link = getlink(model, model_class)
         
-        # Check dimensions
         if len(coef) < basis_ncol:
             raise ValueError(
                 f"Model has {len(coef)} coefficients but {basis_name} has {basis_ncol} columns. "
                 f"Model may not include all {basis_name} terms."
             )
-        
-        if vcov.shape[0] < basis_ncol or vcov.shape[1] < basis_ncol:
+        if vcov.ndim != 2 or vcov.shape[0] != len(coef) or vcov.shape[1] != len(coef):
             raise ValueError(
-                f"Variance-covariance matrix has shape {vcov.shape} but needs at least "
-                f"({basis_ncol}, {basis_ncol}) for {basis_name}."
+                f"Variance-covariance matrix has shape {vcov.shape} but the model has {len(coef)} coefficients."
             )
         
+        idx = basis_block(model, len(coef), basis_ncol, kind, basis_name)
+        
         return {
-            'coef': coef,
-            'vcov': vcov,
+            'coef': coef[idx],
+            'vcov': vcov[np.ix_(idx, idx)],
             'link': link,
             'class': model_class
         }

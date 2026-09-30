@@ -466,7 +466,6 @@ def _tiny_glm_data(family, n=80):
     return y, np.column_stack([np.ones(n), x])
 
 
-@known_defect('I2', 'attr-point-5', note='statsmodels GLM link objects have no .name; class table says GLM -> identity')
 @pytest.mark.parametrize('kind', ['poisson', 'quasipoisson', 'binomial'])
 def test_getlink_statsmodels_glm_matches_R(kind):
     """R getlink: poisson/quasipoisson -> 'log', binomial -> 'logit' (quasipoisson = Poisson family with scale='X2' in
@@ -480,7 +479,6 @@ def test_getlink_statsmodels_glm_matches_R(kind):
     assert getlink(fit) == _r_getlink(kind)
 
 
-@known_defect('I2', 'attr-point-5', note='statsmodels discrete Logit result class is BinaryResultsWrapper -> None')
 def test_getlink_statsmodels_discrete_logit_matches_R():
     sm = _sm()
     from model_utils import getlink
@@ -508,7 +506,6 @@ def test_getlink_neighbours_that_are_already_faithful():
         assert getlink(type(cls_name, (), {})()) == _r_getlink('quasipoisson')
 
 
-@known_defect('I2', 'attr-point-5', note='statsmodels Poisson GLM detected as identity: log-RR used as RR')
 @pytest.mark.parametrize('cen', [15.0, 15.05])
 @pytest.mark.parametrize('mode,x0', [('af_obs', None), ('an_obs', None), ('an_tot', 'hot'), ('af_tot', 'cold')])
 @pytest.mark.parametrize('family', ['poisson', 'binomial'])
@@ -543,7 +540,6 @@ def test_attrdl_rejects_non_log_logit_model_like_R(sub):
 _INTERCEPT_FIRST = ['const_first', 'seas_first', 'cb_middle']     # cross-basis block does not start the design
 
 
-@known_defect('I1', 'attr-point-6', note='CrossPred takes coefficients[:ncol] positionally')
 @pytest.mark.parametrize('layout', _INTERCEPT_FIRST)
 def test_crosspred_model_selects_crossbasis_block_by_name(sub, layout):
     """CrossPred(model=<statsmodels fit with named columns>) vs R crosspred on the name-selected cross-basis
@@ -555,7 +551,6 @@ def test_crosspred_model_selects_crossbasis_block_by_name(sub, layout):
         assert_same(val, ref[key], f'crosspred {key} layout={layout}')
 
 
-@known_defect('I1', 'attr-point-6', note='intercept-first design: wrong coefficients, no error (26x AF in evidence)')
 @pytest.mark.parametrize('mode,x0', [('af_obs', None), ('an_tot', 'hot'), ('af_tot', 'cold')])
 @pytest.mark.parametrize('layout', _INTERCEPT_FIRST)
 def test_attrdl_model_with_intercept_first_design_matches_R(sub, layout, mode, x0):
@@ -568,7 +563,6 @@ def test_attrdl_model_with_intercept_first_design_matches_R(sub, layout, mode, x
     assert_same(py, ref, f'attrdl(model, {layout}) {mode}')
 
 
-@known_defect('I1', 'attr-point-6', note='unnamed design with intercept first: silently wrong instead of an error')
 @pytest.mark.parametrize('layout', ['const_first', 'seas_first'])
 def test_unnamed_intercept_first_design_never_silently_wrong(sub, layout):
     """A numpy design carries no coefficient names, so the cross-basis block cannot be identified. R stops ('coef/vcov
@@ -583,7 +577,6 @@ def test_unnamed_intercept_first_design_never_silently_wrong(sub, layout):
     assert_same(pred.allfit, ref['allfit'], f'crosspred allfit, unnamed {layout}')
 
 
-@known_defect('I1', 'attr-point-6', note='explicit coef longer than the basis is silently truncated')
 @pytest.mark.parametrize('entry', ['crosspred', 'attrdl'])
 def test_explicit_coef_longer_than_basis_is_rejected_like_R(sub, entry):
     """coef=/vcov= with 3 extra trailing coefficients: R crosspred stops ('coef/vcov not consistent with basis matrix')
