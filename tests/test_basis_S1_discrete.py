@@ -278,8 +278,6 @@ def test_strata_full_df_ref_intercept_grid_matches_r():
     assert not bad, f'{len(bad)} of 48 configurations differ from R, e.g.\n' + '\n'.join(bad[:6])
 
 
-@known_defect(THEME, 'crossbasis-18', 'basis-discrete-8',
-              note="R's old 'knots' argument is renamed 'breaks' for strata (with a warning)")
 @pytest.mark.parametrize('knots', [[10.0, 20.0], [5.0, 15.0, 25.0]], ids=str)
 def test_strata_old_knots_argument_is_an_alias_of_breaks(knots):
     """R checkonebasis(): onebasis(x, 'strata', knots=k) is onebasis(x, 'strata', breaks=k); PyDLNM ignored it."""

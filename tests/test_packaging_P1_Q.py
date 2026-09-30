@@ -684,7 +684,6 @@ def _check_lag_case(n, lag):
         assert not np.isnan(cb).all(), 'the last rows must be valid'
 
 
-@known_defect('Q2', 'crossbasis-16', note='lag >= n gives a silent all-NaN cross-basis; R (tsModel::Lag) stops')
 @pytest.mark.parametrize('n,lag', _LAG_STOPS, ids=[_lag_id(c) for c in _LAG_STOPS])
 def test_lag_not_shorter_than_series_raises_like_r(n, lag):
     _check_lag_case(n, lag)

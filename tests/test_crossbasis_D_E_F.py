@@ -324,8 +324,6 @@ def run_matrix_case(matrix_key, var, lag_basis, lag):
 
 
 @pytest.mark.parametrize('matrix_key, var, lag_basis, lag', MATRIX_CASES)
-@known_defect('E', 'basis-discrete-11', 'crossbasis-5',
-              note='matrix x: wrong flatten order and a wrong algorithm; ValueError broadcast (n_obs != ncol)')
 def test_matrix_x_matches_r(matrix_key, var, lag_basis, lag):
     """x with several columns is a matrix of lagged occurrences: R evaluates the basis on as.numeric(x)
     (column-major), reshapes each basis column back to n x nlag and multiplies by the lag basis."""
@@ -335,8 +333,6 @@ def test_matrix_x_matches_r(matrix_key, var, lag_basis, lag):
     assert list(np.asarray(cb.lag).ravel()) == list(attrs['lag'].ravel())
 
 
-@known_defect('E', 'basis-discrete-11', 'crossbasis-5',
-              note='n_obs == ncol: no exception, but the result is basis*x with row-major indexing, not R')
 def test_square_matrix_x_matches_r():
     """Square exposure matrix (n_obs == ncol): the broadcast crash is masked and the numbers are simply wrong."""
     cb, ref, _ = run_matrix_case('square6x6', BS2Q, NS3L, 5)
@@ -344,8 +340,6 @@ def test_square_matrix_x_matches_r():
 
 
 @pytest.mark.parametrize('fun, kw', [('bs', {'degree': 2}), ('ns', {})], ids=['bs', 'ns'])
-@known_defect('E', 'basis-discrete-11',
-              note='matrix path must record training Boundary_knots for ns as well, otherwise crosspred fails')
 def test_matrix_x_crosspred_matches_r(fun, kw):
     """A matrix cross-basis must be usable downstream: crosspred outside the training range needs the training
     Boundary_knots in the recorded argvar (R keeps them as an attribute)."""
@@ -402,8 +396,6 @@ ONEBASIS_2D_OK = [
 
 
 @pytest.mark.parametrize('fun, rargs, kw', ONEBASIS_2D_BAD)
-@known_defect('E', 'basis-discrete-17',
-              note='2-D x is not flattened column-major (lin/poly wrong order, thr keeps columns, strata raises)')
 def test_onebasis_2d_input_is_flattened_column_major(fun, rargs, kw):
     x = matrix_input()
     ref = r_onebasis(x, fun, rargs)
@@ -454,16 +446,12 @@ def run_group_case(temp, group, lag, nan_at, lag_basis):
 
 
 @pytest.mark.parametrize('group, lag, nan_at, lag_basis', GROUP_CASES)
-@known_defect('E', 'crossbasis-6',
-              note='group is stored but ignored: lags cross group boundaries, 5 NaN rows instead of 5 per group')
 def test_group_lags_stay_inside_groups(temp, group, lag, nan_at, lag_basis):
     cb, ref, _ = run_group_case(temp, group, lag, nan_at, lag_basis)
     assert list(nan_rows(cb.basis)) == list(nan_rows(ref)), 'rows with NaN differ from R (first rows of each group)'
     assert_close(cb.basis, ref, rtol=TOL, what='grouped cross-basis')
 
 
-@known_defect('E', 'crossbasis-6',
-              note='the stored group attribute is the raw label array, R stores length(unique(group))')
 def test_group_attribute_is_number_of_groups(temp):
     """R: attr(crossbasis, "group") is the number of groups."""
     group = np.repeat([1, 2, 3], 100)
@@ -478,7 +466,6 @@ def test_group_attribute_is_number_of_groups(temp):
     pytest.param(20, 10, [5, 5, 5, 5], id='groups-of-5-lag10'),
     pytest.param(20, 10, [10, 10], id='groups-of-10-lag10-length-equals-diff'),
 ], )
-@known_defect('E', 'crossbasis-6', note='no checkgroup: groups not longer than diff(lag) are accepted silently')
 def test_group_shorter_than_lag_is_rejected(temp, n, lag, sizes):
     """R checkgroup: 'each group must have length > diff(lag)'."""
     x = temp[:n]
@@ -492,8 +479,6 @@ def test_group_shorter_than_lag_is_rejected(temp, n, lag, sizes):
             CrossBasis(x, lag=lag, argvar={'fun': 'lin'}, arglag={'fun': 'ns', 'df': 3}, group=group)
 
 
-@known_defect('E', 'crossbasis-6',
-              note="R checkgroup: 'group' allowed only for time series data; today an unrelated broadcast error")
 def test_group_with_matrix_x_is_rejected_for_the_right_reason():
     x = exposure_matrix('exphist')
     group = np.repeat([1., 2.], 60)
@@ -573,8 +558,6 @@ ONEBASIS_UNUSED = [
 
 
 @pytest.mark.parametrize('fun, rargs, kw, key', ONEBASIS_R_SPELLED)
-@known_defect('F', 'basis-cont-4', 'basis-discrete-8', 'crossbasis-15',
-              note='R spellings are swallowed by **kwargs: default boundary / median threshold / single split used')
 def test_onebasis_r_spelled_args_honoured_or_rejected(fun, rargs, kw, key):
     push(kn=KN, bk=BK)
     ref = r_onebasis(X1, fun, rargs)
@@ -583,8 +566,6 @@ def test_onebasis_r_spelled_args_honoured_or_rejected(fun, rargs, kw, key):
 
 
 @pytest.mark.parametrize('fun, rargs, kw, key', ONEBASIS_UNUSED)
-@known_defect('F', 'basis-cont-4', 'basis-discrete-8', 'crossbasis-15',
-              note="unknown / wrong-function arguments are accepted; R: 'unused argument'")
 def test_onebasis_unused_arguments_are_rejected(fun, rargs, kw, key):
     push(kn=KN, xin=X1)
     must_be_rejected(lambda: OneBasis(X1, fun=fun, **copy.deepcopy(kw)),
@@ -684,8 +665,6 @@ CB_UNUSED = [
 
 
 @pytest.mark.parametrize('argvar_fn, argvar_r, key', CB_R_SPELLED)
-@known_defect('F', 'basis-cont-4', 'basis-discrete-8', 'crossbasis-15',
-              note="CrossBasis argvar: 'Boundary.knots' / 'bound' ignored (data-range boundary used), type= ignored")
 def test_crossbasis_r_spelled_argvar_honoured_or_rejected(argvar_fn, argvar_r, key):
     x, kv, bk = cb_series()
     push(kv=kv, bk=bk)
@@ -696,8 +675,6 @@ def test_crossbasis_r_spelled_argvar_honoured_or_rejected(argvar_fn, argvar_r, k
 
 
 @pytest.mark.parametrize('argvar_fn, arglag, argvar_r, arglag_r, key', CB_UNUSED)
-@known_defect('F', 'basis-cont-4', 'basis-discrete-8', 'crossbasis-15',
-              note="CrossBasis: unknown / misspelled / wrong-function keys in argvar or arglag are accepted")
 def test_crossbasis_unused_argument_is_rejected(argvar_fn, arglag, argvar_r, arglag_r, key):
     x, kv, bk = cb_series()
     push(kv=kv, bk=bk, xin=x)
