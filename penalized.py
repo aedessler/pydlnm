@@ -13,6 +13,7 @@ from typing import Optional, Union, Dict, Tuple, Any, List
 import warnings
 
 from basis import CrossBasis, OneBasis
+from utils import warn_experimental
 from enhanced_splines import bs_enhanced, ns_enhanced
 
 
@@ -42,6 +43,8 @@ class PenalizedCrossBasis(CrossBasis):
                  diff_order: int = 2,
                  **kwargs):
         
+        warn_experimental("PenalizedCrossBasis")
+        
         # Initialize parent CrossBasis
         super().__init__(x, lag, argvar, arglag, **kwargs)
         
@@ -61,8 +64,8 @@ class PenalizedCrossBasis(CrossBasis):
         """Create penalty matrices for both dimensions"""
         
         # Get basis dimensions
-        n_var_basis = self.basis_var.shape[1]
-        n_lag_basis = self.basis_lag.shape[1]
+        n_var_basis = self.basisvar.shape[1]
+        n_lag_basis = self.basislag.shape[1]
         
         # Create penalty matrices for each dimension
         self.P_var = self._create_penalty_matrix(n_var_basis, self.penalty_type, self.diff_order)
@@ -247,8 +250,13 @@ class PenalizedDLNM:
             X_full = X_basis
             P_extended = self.basis.get_penalty_matrix()
         
-        self.X = X_full
-        self.y = y
+        # Drop incomplete rows as R's glm()/gam() do (na.action = na.omit): the first `lag` rows of a cross-basis
+        # are NaN by construction.
+        y = y.astype(float)
+        complete = ~np.isnan(X_full).any(axis=1) & ~np.isnan(y)
+        self.complete_cases = complete
+        self.X = X_full[complete]
+        self.y = y[complete]
         self.P = P_extended
         self.family = family
         

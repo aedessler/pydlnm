@@ -24,25 +24,37 @@ except ImportError:
     HAS_RPY2 = False
 
 
+_R_SCRATCH = None
+
+
+def _r_scratch():
+    """Private R environment (child of baseenv) for the temporaries of the spline calls: nothing is written into
+    the user's global environment and user-defined R objects or functions cannot mask the ones used here."""
+    global _R_SCRATCH
+    if _R_SCRATCH is None:
+        _R_SCRATCH = robjects.r('new.env(parent = baseenv())')
+    return _R_SCRATCH
+
+
+def _r_eval(code: str):
+    """Evaluate R code in the private scratch environment."""
+    return robjects.baseenv['eval'](robjects.baseenv['parse'](text=code), _r_scratch())
+
+
 def _eval_r_spline(r_call: str):
-    """Evaluate an R ``splines::ns()``/``splines::bs()`` call.
+    """Evaluate an R ``splines::ns()``/``splines::bs()`` call (arguments ``x``, ``ik``, ``bk`` in the scratch
+    environment).
 
     Returns ``(basis, interior_knots, boundary_knots)`` where the knots are the ones R actually used, also when it
     derived them from the data through ``df=``. R's ``onebasis()`` keeps them as attributes of the basis and
     ``crossbasis()``/``mkXpred()`` rebuild the identical basis at new x from them. Under the numpy2ri converter the
-    attributes of an R result are lost, so the R object is held in a scratch variable and read back.
+    attributes of an R result are lost, so the R object is held in the scratch environment and read back.
     Must be called inside a ``localconverter(default + numpy2ri)`` context.
     """
-    robjects.r(f'`.pydlnm_spline` <- {r_call}')
-    try:
-        basis = np.array(robjects.r('`.pydlnm_spline`'))
-        knots = np.atleast_1d(np.asarray(
-            robjects.r('as.numeric(attr(`.pydlnm_spline`, "knots"))'), dtype=float))
-        boundary = np.atleast_1d(np.asarray(
-            robjects.r('as.numeric(attr(`.pydlnm_spline`, "Boundary.knots"))'), dtype=float))
-    finally:
-        robjects.r('if (exists(".pydlnm_spline", envir=globalenv())) '
-                   'rm(list=".pydlnm_spline", envir=globalenv())')
+    _r_eval(f'res <- {r_call}')
+    basis = np.array(_r_eval('unclass(res)'))
+    knots = np.atleast_1d(np.asarray(_r_eval('as.numeric(attr(res, "knots"))'), dtype=float))
+    boundary = np.atleast_1d(np.asarray(_r_eval('as.numeric(attr(res, "Boundary.knots"))'), dtype=float))
     return basis, knots, boundary
 
 
@@ -254,18 +266,16 @@ class SplineBasis(BaseBasisFunction):
         with localconverter(robjects.default_converter + numpy2ri.converter):
             bk = (self.Boundary_knots if self.Boundary_knots is not None
                   else np.array([np.nanmin(x), np.nanmax(x)]))
-            robjects.globalenv['_ns_x']  = x
-            robjects.globalenv['_ns_bk'] = bk
+            scratch = _r_scratch()
+            scratch['x'] = x
+            scratch['bk'] = bk
             if self.knots is not None:
-                robjects.globalenv['_ns_ik'] = np.asarray(self.knots, dtype=float)
-                r_call = (f'splines::ns(`_ns_x`, knots=`_ns_ik`, '
-                          f'intercept={icpt}, Boundary.knots=`_ns_bk`)')
+                scratch['ik'] = np.asarray(self.knots, dtype=float)
+                r_call = f'splines::ns(x, knots=ik, intercept={icpt}, Boundary.knots=bk)'
             elif self.df is not None:
-                r_call = (f'splines::ns(`_ns_x`, df={int(self.df)}, '
-                          f'intercept={icpt}, Boundary.knots=`_ns_bk`)')
+                r_call = f'splines::ns(x, df={int(self.df)}, intercept={icpt}, Boundary.knots=bk)'
             else:
-                r_call = (f'splines::ns(`_ns_x`, df=4, '
-                          f'intercept={icpt}, Boundary.knots=`_ns_bk`)')
+                r_call = f'splines::ns(x, df=4, intercept={icpt}, Boundary.knots=bk)'
             basis_matrix, knots_used, boundary_used = _eval_r_spline(r_call)
 
         # Record the knots R used (R: attributes of the ns object), so that prediction can rebuild this basis
@@ -367,18 +377,19 @@ class BSplineBasis(BaseBasisFunction):
                     else np.array([np.nanmin(x), np.nanmax(x)]))
 
         with localconverter(robjects.default_converter + numpy2ri.converter):
-            robjects.globalenv['_bs_x']   = x
-            robjects.globalenv['_bs_bk']  = boundary
+            scratch = _r_scratch()
+            scratch['x'] = x
+            scratch['bk'] = boundary
             if self.knots is not None:
-                robjects.globalenv['_bs_ik'] = np.asarray(self.knots, dtype=float)
-                r_call = (f'splines::bs(`_bs_x`, knots=`_bs_ik`, degree={int(self.degree)}, '
-                          f'intercept={icpt}, Boundary.knots=`_bs_bk`)')
+                scratch['ik'] = np.asarray(self.knots, dtype=float)
+                r_call = (f'splines::bs(x, knots=ik, degree={int(self.degree)}, '
+                          f'intercept={icpt}, Boundary.knots=bk)')
             elif self.df is not None:
-                r_call = (f'splines::bs(`_bs_x`, df={int(self.df)}, degree={int(self.degree)}, '
-                          f'intercept={icpt}, Boundary.knots=`_bs_bk`)')
+                r_call = (f'splines::bs(x, df={int(self.df)}, degree={int(self.degree)}, '
+                          f'intercept={icpt}, Boundary.knots=bk)')
             else:
-                r_call = (f'splines::bs(`_bs_x`, df=4, degree={int(self.degree)}, '
-                          f'intercept={icpt}, Boundary.knots=`_bs_bk`)')
+                r_call = (f'splines::bs(x, df=4, degree={int(self.degree)}, '
+                          f'intercept={icpt}, Boundary.knots=bk)')
             basis_matrix, knots_used, boundary_used = _eval_r_spline(r_call)
 
         # Record the knots R used (R: attributes of the bs object), so that prediction can rebuild this basis

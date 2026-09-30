@@ -11,6 +11,14 @@ from typing import Union, List, Tuple, Optional, Any
 import warnings
 
 
+def warn_experimental(feature: str) -> None:
+    """Warn that a feature has not been validated against R (penalized and seasonality modules)."""
+    warnings.warn(
+        f"{feature} is experimental: it has no validated R counterpart in dlnm and has known open issues "
+        "(see README, 'Experimental modules'). Do not rely on it for published analyses.",
+        UserWarning, stacklevel=3)
+
+
 def mklag(lag: Union[int, List[int], Tuple[int, ...], np.ndarray]) -> np.ndarray:
     """
     Validate and standardize lag specifications for distributed lag models.

@@ -161,13 +161,11 @@ def _init_tree():
         pytest.fail(f'{_INIT.name} does not parse: SyntaxError line {exc.lineno}: {exc.msg} -> {exc.text!r}')
 
 
-@known_defect('Q1', 'basis-cont-16', note="line 99 'from  import data'")
 def test_init_py_is_valid_python():
     tree = _init_tree()
     compile(tree, str(_INIT), 'exec')            # in-process, no .pyc written, repo root is never imported
 
 
-@known_defect('Q1', 'basis-cont-16', note="'data' is exported in __all__ but no data module exists")
 def test_init_py_all_names_are_bound():
     tree = _init_tree()
     bound, exported = set(), None
@@ -207,7 +205,6 @@ print('RESULT' + json.dumps({'error': None,
 """
 
 
-@known_defect('Q1', 'basis-cont-16', note='package cannot be loaded because of the SyntaxError')
 def test_init_py_loads_as_package():
     """Load __init__.py as package 'pydlnm' in a subprocess (flat modules on sys.path) and check the public API."""
     res = _run_py(_PACKAGE_SCRIPT, r_home=_real_r_home())
@@ -247,7 +244,6 @@ P1_SPECS = ['ns_ns', 'bs_ns', 'ns_integer']
 _P1 = ('basis-discrete-13', 'crossbasis-17')
 
 
-@known_defect('P1', *_P1, note="AttributeError: no attribute 'basis_var'")
 @pytest.mark.parametrize('spec', P1_SPECS)
 def test_penalized_crossbasis_constructs_and_matches_r_crossbasis(spec):
     from penalized import PenalizedCrossBasis
@@ -275,7 +271,6 @@ def _r_S(k, d):
     return rget(f'crossprod(diff(diag({k}), differences={d}))')
 
 
-@known_defect('P1', *_P1, note="AttributeError: no attribute 'basis_var'")
 @pytest.mark.parametrize('spec', P1_SPECS)
 @pytest.mark.parametrize('diff_order', [1, 2])
 def test_penalty_layout_follows_r_cbpen(spec, diff_order):
@@ -303,7 +298,6 @@ def test_penalty_layout_follows_r_cbpen(spec, diff_order):
     assert_close(P_both, 2.0 * P_var + 3.0 * P_lag, rtol=1e-12, what='penalty linear in the smoothing parameters')
 
 
-@known_defect('P1', *_P1, note="AttributeError: no attribute 'basis_var'")
 @pytest.mark.parametrize('penalty_type', ['difference', 'ridge', 'roughness'])
 def test_every_penalty_type_gives_symmetric_psd_matrices(penalty_type):
     from penalized import PenalizedCrossBasis
@@ -321,8 +315,6 @@ def test_every_penalty_type_gives_symmetric_psd_matrices(penalty_type):
         assert_close(np.asarray(pcb.P_var), rget(f'diag({kv})'), rtol=1e-12, what='ridge P_var vs R diag()')
 
 
-@known_defect('P1', *_P1, note="AttributeError: no attribute 'basis_var'; the fit also needs the NaN rows dropped "
-                               "(basis-discrete-13 patch)")
 def test_penalized_dlnm_fit_matches_r_penalised_normal_equations():
     """penalized_dlnm() must run end to end and, at the penalties it selected, return R's solution of
     (X'X + P) b = X'y on the complete rows of R's crossbasis (R's glm/gam drop the NaN start-up rows)."""
@@ -414,7 +406,6 @@ def _check_import_keeps_r_home(probe, module):
     assert probe[module] == probe['sentinel'], f"import {module} changed R_HOME to {probe[module]!r}"
 
 
-@known_defect('Q2', 'basis-discrete-18', note='improved_glm.py:15 and rpy2_glm.py:15 assign R_HOME unconditionally')
 @pytest.mark.parametrize('module', ['improved_glm', 'rpy2_glm'])
 def test_importing_a_glm_module_keeps_the_callers_r_home(module, import_probe):
     _check_import_keeps_r_home(import_probe, module)
@@ -608,7 +599,6 @@ def _wrapper_calls():
 WRAPPER_CALLS = ['ns_df', 'ns_knots', 'bs_df', 'bs_knots_boundary']
 
 
-@known_defect('Q2', 'basis-cont-17', note='ns/bs wrappers assign _ns_x/_ns_bk/_ns_ik/_bs_x/_bs_bk/_bs_ik in R global env')
 @pytest.mark.parametrize('call', WRAPPER_CALLS)
 def test_spline_wrappers_leave_r_global_env_untouched(call):
     fn, _ = _wrapper_calls()[call]
@@ -622,8 +612,6 @@ def test_spline_wrappers_leave_r_global_env_untouched(call):
     assert not leaked, f'{call}: objects left in R global env: {leaked}'
 
 
-@known_defect('Q2', 'basis-cont-17', note='CrossBasis also goes through the leaking ns/bs wrappers (OneBasis); '
-                                          'needs the crossbasis-16 and the wrapper fix together')
 def test_crossbasis_leaves_r_global_env_untouched():
     from basis import CrossBasis
     x = _temp(300)

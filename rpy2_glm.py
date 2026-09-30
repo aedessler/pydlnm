@@ -11,8 +11,8 @@ import pandas as pd
 from typing import Union, Optional, Dict, Any, Tuple
 import warnings
 
-# Set R environment before importing rpy2
-os.environ['R_HOME'] = '/Library/Frameworks/R.framework/Resources'
+# R is started by rpy2 from the R_HOME of the environment (set it before importing PyDLNM if the R found on the
+# PATH is not the one with the required packages); this module never overrides it.
 
 try:
     import rpy2

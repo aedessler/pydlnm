@@ -95,9 +95,6 @@ from multi_location import (
     multi_location_dlnm_analysis,
 )
 
-# Data
-from  import data
-
 __all__ = [
     "OneBasis",
     "CrossBasis", 
@@ -144,5 +141,4 @@ __all__ = [
     "penalized_dlnm",
     "MultiLocationDLNM",
     "multi_location_dlnm_analysis",
-    "data",
 ]
