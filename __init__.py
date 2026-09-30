@@ -36,7 +36,7 @@ except ImportError:
         stacklevel=2
     )
 
-__version__ = "0.6.0"
+__version__ = "0.10.0"
 __author__ = "Python DLNM Contributors"
 
 # Core classes

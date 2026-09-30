@@ -920,7 +920,6 @@ _MVMETA_STAGE = re.compile(r'mvmeta|full pipeline', re.I)
 _QUALIFIED = re.compile(r'toleran|optimi[sz]|reltol|1e-\d|10\^-?\d|e-\d|except|approximate|about|<\s*\d', re.I)
 
 
-@known_defect('N2', 'mvmeta-est-11', 'mvmeta-blup-14', note="README claims machine precision / Exact match for MVMeta")
 def test_readme_precision_claims_for_the_mvmeta_stage_match_measurement():
     """The README may only say 'machine precision' / 'Exact match' about the MVMeta stage if the measured agreement
     with R's default mvmeta backs it (<= 1e-10); otherwise the line has to state the tolerance. Measured: ~1e-6..1e-5."""

@@ -196,9 +196,8 @@ class MultiLocationDLNM:
             control=control
         )
         
-        print(f"  ✅ Meta-analysis converged: {self.mv_model.converged}")
-
-        # The fitted values are valid whatever the optimiser's convergence flag says (the flag is reported alongside)
+        # The fitted values are valid whatever the optimiser's convergence flag says (get_summary reports the flag
+        # alongside)
         print(f"  - Between-study variance (trace): {np.trace(self.mv_model.psi):.6f}")
         
     def calculate_blups(self, vcov: bool = True) -> List[Dict]:
