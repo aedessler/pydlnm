@@ -241,11 +241,7 @@ def crossreduce(basis: Union[CrossBasis, DLNMGLMInterface],
     
     def lag_basis_at(values) -> np.ndarray:
         values = np.atleast_1d(np.asarray(values, dtype=float))
-        if arglag.get('fun') == 'integer':
-            # each lag is independent: the identity over the lags of the cross-basis
-            full = seqlag(cb_obj.lag)
-            return np.vstack([(full == v).astype(float) for v in values])
-        return OneBasis(values, **arglag).basis
+        return OneBasis(values, **arglag).basis        # 'integer' rebuilds its indicator rows from the fitted values
     
     def var_basis_at(values) -> np.ndarray:
         basis_var = OneBasis(np.atleast_1d(np.asarray(values, dtype=float)), **argvar).basis
