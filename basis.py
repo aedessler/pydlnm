@@ -74,7 +74,7 @@ class OneBasis:
         'ns':     {'knots': 'knots', 'Boundary_knots': 'Boundary_knots', 'intercept': 'intercept'},
         'bs':     {'degree': 'degree', 'knots': 'knots', 'Boundary_knots': 'Boundary_knots',
                    'intercept': 'intercept'},
-        'strata': {'breaks': 'breaks', 'ref': 'ref', 'intercept': 'intercept'},
+        'strata': {'df': 'df', 'breaks': 'breaks', 'ref': 'ref', 'intercept': 'intercept'},
         'thr':    {'thr.value': 'thr_value', 'side': 'side', 'intercept': 'intercept'},
     }
 
@@ -166,7 +166,7 @@ class OneBasis:
             return {k: v for k, v in self.attributes.items() if k not in ('range', 'cen')}
         args = {'fun': self.fun}
         for attr, keyword in self._RESOLVED_ARGS[self.fun].items():
-            if attr in self.attributes:
+            if self.attributes.get(attr) is not None:
                 value = self.attributes[attr]
                 if attr in ('knots', 'Boundary_knots', 'breaks', 'thr.value'):
                     value = np.atleast_1d(np.asarray(value, dtype=float))
@@ -298,24 +298,11 @@ class CrossBasis:
         self.argvar = dict(argvar) if argvar else {}
         self.arglag = dict(arglag) if arglag else {}
         
-        # Set default lag arguments to EXACTLY match R DLNM defaults
+        # As R's crossbasis(): strata(df=1, intercept=TRUE) (one unconstrained column, the sum of the exposure
+        # basis over the lags) when arglag is empty or the lag period is a single lag; onebasis()'s default
+        # function ("ns") when arglag has no 'fun'.
         if len(self.arglag) == 0 or np.diff(self.lag)[0] == 0:
-            # R uses natural splines by default for lag dimension with logknots
-            lag_seq = seqlag(self.lag)
-            if len(lag_seq) > 1:
-                # Use proper logknots function matching R exactly
-                from utils import logknots
-                lag_range = [int(min(lag_seq)), int(max(lag_seq))]
-                # Default to 3 knots if lag range > 1 
-                if np.diff(lag_range)[0] > 1:
-                    knots = logknots(lag_range, nk=3)
-                    self.arglag = {'fun': 'ns', 'knots': knots, 'intercept': True}
-                else:
-                    self.arglag = {'fun': 'ns', 'df': 4, 'intercept': True}
-            else:
-                self.arglag = {'fun': 'ns', 'df': 4, 'intercept': True}
-        
-        # Ensure natural splines are used for lag by default (like R)
+            self.arglag = {'fun': 'strata', 'df': 1, 'intercept': True}
         if 'fun' not in self.arglag:
             self.arglag['fun'] = 'ns'
 
@@ -431,6 +418,9 @@ class CrossBasis:
                     lag_matrix[:, t_idx] = r_var_basis[:, v]
                 elif t_int > 0:
                     lag_matrix[t_int:, t_idx] = r_var_basis[:-t_int, v]
+                else:
+                    # negative lag: the exposure |lag| steps ahead (the last |lag| rows stay NaN)
+                    lag_matrix[:t_int, t_idx] = r_var_basis[-t_int:, v]
             # (n_obs, n_lags) @ (n_lags, n_lag_basis) → (n_obs, n_lag_basis)
             # NaN rows propagate automatically through np.dot when any lag is NaN
             self.basis[:, v * n_lag_basis:(v + 1) * n_lag_basis] = lag_matrix @ r_lag_basis

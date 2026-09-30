@@ -215,8 +215,6 @@ def test_strata_without_missing_values_matches_r():
 
 
 # ---- basis-discrete-4 / crossbasis-18: df, intercept and ref semantics -----------------------------------------------
-@known_defect(THEME, 'basis-discrete-4', 'crossbasis-18', 'basis-discrete-15',
-              note='df counts breaks+intercept columns in R; PyDLNM builds df-1 breaks for intercept=FALSE')
 @pytest.mark.parametrize('df,ref', [(2, 1), (3, 1), (3, 2), (4, 3), (5, 1)])
 def test_strata_df_is_the_number_of_columns(df, ref):
     """R: intercept=FALSE gives df columns (df quantile breaks, df+1 strata, minus the reference)."""
@@ -225,8 +223,6 @@ def test_strata_df_is_the_number_of_columns(df, ref):
     assert py_onebasis(x, 'strata', df=df, ref=ref, intercept=False).shape[1] == df
 
 
-@known_defect(THEME, 'basis-discrete-4', 'crossbasis-18', 'basis-discrete-15', 'basis-discrete-2', 'crossbasis-1',
-              'crossbasis-2', note='df=1 with intercept is the R default lag basis: one all-ones column')
 @pytest.mark.parametrize('df,ref', [(1, 1), (1, 0), (0, 0)])
 def test_strata_intercept_without_breaks_is_a_single_column_of_ones(df, ref):
     """R special case df-intercept <= 0 without breaks: one all-ones column, ref/intercept handling is skipped."""
@@ -236,8 +232,6 @@ def test_strata_intercept_without_breaks_is_a_single_column_of_ones(df, ref):
     assert b.shape == (len(x), 1) and np.all(b == 1.0)
 
 
-@known_defect(THEME, 'basis-discrete-4', 'crossbasis-18',
-              note='ref=0: no column dropped and no intercept column with intercept=TRUE; reset to 1 otherwise')
 @pytest.mark.parametrize('kw', [dict(df=3, intercept=True), dict(df=4, intercept=False), dict(df=3, intercept=False),
                                 dict(breaks=np.array([10.0, 20.0]), intercept=True),
                                 dict(breaks=np.array([10.0, 20.0]), intercept=False),
@@ -248,7 +242,6 @@ def test_strata_ref_zero(kw):
     assert_onebasis_matches_r(_x_normal(), 'strata', ref=0, **kw)
 
 
-@known_defect(THEME, 'basis-discrete-4', 'crossbasis-18', note='out-of-range ref is silently accepted')
 @pytest.mark.parametrize('kw', [dict(breaks=np.array([10.0]), ref=3), dict(breaks=np.array([10.0, 20.0]), ref=4),
                                 dict(df=1, intercept=True, ref=2), dict(df=2, intercept=True, ref=3)], ids=_ids)
 def test_strata_invalid_ref_is_an_error(kw):
@@ -260,8 +253,6 @@ def test_strata_invalid_ref_is_an_error(kw):
         py_onebasis(x, 'strata', **kw)
 
 
-@known_defect(THEME, 'basis-discrete-4', 'crossbasis-18', 'basis-discrete-15',
-              note='default (quantile) breaks attribute and df: df-intercept breaks in R')
 @pytest.mark.parametrize('kw', [dict(df=3), dict(df=5), dict(df=3, ref=2)], ids=_ids)
 def test_strata_default_breaks_and_df_attributes(kw):
     """The resolved breaks/df attributes (which crosspred re-uses) are R's."""
@@ -274,8 +265,6 @@ def test_strata_default_breaks_and_df_attributes(kw):
         f"df attribute: PyDLNM {ob.attributes['df']} vs R {int(r_attr('df')[0])}"
 
 
-@known_defect(THEME, 'basis-discrete-4', 'crossbasis-18',
-              note='whole df x ref x intercept grid: shape, values and R errors')
 def test_strata_full_df_ref_intercept_grid_matches_r():
     """Every (df, ref, intercept) combination with default breaks, R errors included."""
     x = _x_normal()
@@ -308,7 +297,6 @@ def _x_with_nan():
     return x
 
 
-@known_defect(THEME, 'basis-discrete-5', 'crossbasis-18', note='np.digitize sends NaN to the last stratum')
 @pytest.mark.parametrize('kw', [dict(breaks=np.array([3.0, 7.0])), dict(breaks=np.array([3.0, 7.0]), ref=2),
                                 dict(breaks=np.array([3.0, 7.0]), intercept=True), dict(df=1),
                                 dict(df=3, intercept=True)], ids=_ids)
@@ -321,7 +309,6 @@ def test_strata_nan_exposure_gives_na_rows(kw):
 
 
 # ---- basis-discrete-15: breaks handling -----------------------------------------------------------------------------
-@known_defect(THEME, 'basis-discrete-15', note='breaks are not sorted/uniquified; scalar breaks crash')
 @pytest.mark.parametrize('breaks,ref', [([15.0, 5.0], 1), ([15.0, 5.0], 2), ([15.0, 5.0], 3), ([15.0, 5.0, 25.0], 1),
                                         ([5.0, 5.0, 15.0], 1), ([25.0, 5.0, 15.0, 5.0], 2), (15.0, 1), (15.0, 2)],
                          ids=lambda v: str(v))
@@ -332,7 +319,6 @@ def test_strata_breaks_are_sorted_unique_and_may_be_scalar(breaks, ref):
     assert_onebasis_matches_r(x, 'strata', breaks=b, ref=ref)
 
 
-@known_defect(THEME, 'basis-discrete-15', note='df attribute keeps the constructor value; breaks not uniquified')
 @pytest.mark.parametrize('kw', [dict(breaks=np.array([3.0, 7.0])), dict(breaks=np.array([3.0, 7.0]), intercept=True),
                                 dict(breaks=np.array([5.0, 15.0, 25.0])), dict(breaks=np.array([15.0, 5.0, 5.0]))],
                          ids=_ids)
@@ -346,8 +332,6 @@ def test_strata_df_attribute_follows_breaks(kw):
     assert_close(np.atleast_1d(ob.attributes['breaks']).astype(float), r_attr('breaks'), rtol=0, what='breaks attribute')
 
 
-@known_defect(THEME, 'basis-discrete-15', 'basis-discrete-4', 'basis-discrete-2', 'crossbasis-1', 'crossbasis-2',
-              note='df=0: no columns instead of one all-ones column')
 def test_strata_df_zero_is_one_column_of_ones():
     """R: df=0 without breaks leaves breaks NULL: one all-ones column (ref is not applied)."""
     x = _x_normal()
@@ -777,7 +761,6 @@ def test_crossbasis_strata_var_or_lag_basis_matches_r(argvar, arglag, lag):
     assert_crossbasis_matches_r(_temp(400), lag, argvar, arglag)
 
 
-@known_defect(THEME, 'basis-discrete-4', note='strata df= places its breaks differently from R (S1)')
 def test_crossbasis_strata_df_var_basis_matches_r():
     assert_crossbasis_matches_r(_temp(400), 6, dict(fun='strata', df=3), dict(fun='ns', df=3))
 

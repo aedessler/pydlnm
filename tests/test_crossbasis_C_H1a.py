@@ -131,7 +131,6 @@ NS_DF4 = {'fun': 'ns', 'df': 4}
 # ==============================================================================================================
 # Theme C: default arglag = strata(df=1, intercept=TRUE)                      crossbasis-1, basis-cont-10, basis-discrete-2
 # ==============================================================================================================
-@known_defect('C', 'crossbasis-1', note='empty arglag builds ns/logknots (4 lag columns) instead of one strata column')
 @pytest.mark.parametrize('lag', [5, 21])
 @pytest.mark.parametrize('argvar', [BS2_DF5, NS_DF4], ids=['bs2df5', 'nsdf4'])
 def test_default_arglag_is_one_unconstrained_lag_column(lag, argvar):
@@ -140,7 +139,6 @@ def test_default_arglag_is_one_unconstrained_lag_column(lag, argvar):
     assert cb.df[1] == 1 and int(ref['df'][1]) == 1
 
 
-@known_defect('C', 'basis-cont-10', note='empty arglag / {} and lag 0 / [0,0]: ns lag basis instead of strata df=1')
 @pytest.mark.parametrize('lag', [1, 5, 0, [0, 0]], ids=['lag1', 'lag5', 'lag0', 'lag00'])
 @pytest.mark.parametrize('arglag', [None, {}], ids=['omitted', 'emptydict'])
 def test_default_arglag_with_ns_knots_at_median(lag, arglag):
@@ -150,14 +148,11 @@ def test_default_arglag_with_ns_knots_at_median(lag, arglag):
     assert ref['mat'].shape == (800, 2) and cb.shape == (800, 2)
 
 
-@known_defect('C', 'basis-discrete-2', note='default arglag for [0,1] and offset [2,6] lag ranges')
 @pytest.mark.parametrize('lag', [[0, 1], [2, 6]], ids=['0to1', '2to6'])
 def test_default_arglag_short_and_offset_lag_ranges(lag):
     assert_crossbasis_matches_r(_series(300), lag, NS_DF3, arglag=None)
 
 
-@known_defect('C', 'basis-discrete-2', 'crossbasis-1', 'attr-point-10',
-              note='explicit arglag strata df=1: R adds intercept=TRUE and gets one column of ones')
 def test_explicit_strata_df1_lag_basis_is_one_column():
     x = _series(400)
     cb, ref = assert_crossbasis_matches_r(x, 5, NS_DF3, arglag={'fun': 'strata', 'df': 1})
@@ -167,8 +162,6 @@ def test_explicit_strata_df1_lag_basis_is_one_column():
 # ==============================================================================================================
 # Theme C: single-lag cross-bases (lag=0, [k,k])                              crossbasis-2, attr-point-10, basis-discrete-2
 # ==============================================================================================================
-@known_defect('C', 'crossbasis-2', 'attr-point-10', 'basis-cont-10', 'basis-discrete-2',
-              note='ns(df=4) on a single lag value: all interior knots match left boundary knot')
 @pytest.mark.parametrize('lag', [0, [0, 0], [1, 1], [3, 3]], ids=['lag0', 'lag00', 'lag11', 'lag33'])
 def test_single_lag_crossbasis_matches_r(lag):
     x = _series(300)
@@ -178,8 +171,6 @@ def test_single_lag_crossbasis_matches_r(lag):
     assert int(np.isnan(np.asarray(cb.basis)).any(axis=1).sum()) == k
 
 
-@known_defect('C', 'attr-point-10', 'crossbasis-2', 'basis-discrete-2',
-              note='lag=0 with an explicit strata arglag (R ignores arglag when diff(lag)==0)')
 @pytest.mark.parametrize('arglag', [{'fun': 'strata', 'df': 1}, {'fun': 'strata', 'breaks': np.array([1., 3.])},
                                     None], ids=['strata_df1', 'strata_breaks', 'omitted'])
 def test_single_lag_ignores_user_arglag(arglag):
@@ -207,7 +198,6 @@ def test_strata_breaks_lag_basis_matches_r():
 # ==============================================================================================================
 # Theme C: negative lags (tsModel::Lag shifts forward, NaN only in the last |lag| rows)                crossbasis-7
 # ==============================================================================================================
-@known_defect('C', 'crossbasis-7', note='negative-lag columns stay NaN: every row of the cross-basis is NaN')
 @pytest.mark.parametrize('lag, n_nan', [(-3, 3), ([-2, 2], 4), ([-3, -1], 3)], ids=['m3', 'm2to2', 'm3tom1'])
 def test_negative_lag_crossbasis_matches_r(lag, n_nan):
     x = _series(300)
@@ -216,7 +206,6 @@ def test_negative_lag_crossbasis_matches_r(lag, n_nan):
     assert int(np.isnan(np.asarray(cb.basis)).any(axis=1).sum()) == n_nan
 
 
-@known_defect('C', 'crossbasis-7', note='negative lags with an integer lag basis')
 def test_negative_lag_integer_lag_basis_matches_r():
     x = _series(200, start=500)
     assert_crossbasis_matches_r(x, [-2, 1], NS_DF3, arglag={'fun': 'integer'})

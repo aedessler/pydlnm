@@ -390,18 +390,17 @@ class BSplineBasis(BaseBasisFunction):
 
 class StrataBasis(BaseBasisFunction):
     """
-    Stratified/categorical basis function.
-    
-    Converts continuous variables into categorical strata with indicator variables.
-    
+    Stratified/categorical basis function (R dlnm ``strata()``).
+
     Parameters
     ----------
     df : int, default=1
-        Number of categories (strata)
+        Degrees of freedom. Without ``breaks``, ``df - intercept`` breaks are placed at equally spaced quantiles
+        of x. ``df=1`` with ``intercept=True`` has no break: a single column of ones (R's default lag basis).
     breaks : array-like, optional
-        Cut points for stratification. If None, uses quantiles
+        Cut points (sorted and de-duplicated, as R does). Strata are the intervals ``[b_i, b_i+1)``.
     ref : int, default=1
-        Reference category (1-based indexing)
+        Reference stratum (1-based) dropped from the basis; 0 keeps every stratum.
     intercept : bool, default=False
         Whether to include an intercept column
     """
@@ -413,61 +412,78 @@ class StrataBasis(BaseBasisFunction):
         self.df = df
         self.breaks = breaks
         self.ref = ref
-        self.intercept = intercept
+        self.intercept = bool(intercept)
         self.attributes['fun'] = 'strata'
         self.attributes['df'] = df
         self.attributes['ref'] = ref
-        self.attributes['intercept'] = intercept
+        self.attributes['intercept'] = self.intercept
     
     def __call__(self, x: np.ndarray, **kwargs) -> np.ndarray:
         """
-        Generate stratified basis matrix.
-        
+        Generate the stratified basis matrix exactly as R's strata().
+
         Parameters
         ----------
         x : array-like
-            Input vector
-            
+            Input vector (NaN gives NaN strata columns, as R's cut() gives NA)
+
         Returns
         -------
         np.ndarray
             Stratified basis matrix
         """
         x = np.asarray(x, dtype=float)
-        x_clean = x[~np.isnan(x)]
+        nan_mask = np.isnan(x)
+        x_clean = x[~nan_mask]
         
         if len(x_clean) == 0:
             raise ValueError("No valid (non-NaN) values in x")
         
-        # Determine breaks if not provided
-        if self.breaks is None:
-            if self.df == 1:
-                breaks = [np.median(x_clean)]
-            else:
-                quantiles = np.linspace(0, 1, self.df + 1)[1:-1]
-                breaks = np.quantile(x_clean, quantiles)
+        intercept = int(self.intercept)
+        
+        # Define breaks and df
+        if self.breaks is not None:
+            breaks = np.unique(np.atleast_1d(np.asarray(self.breaks, dtype=float)))
+        elif self.df - intercept > 0:
+            k = int(self.df) - intercept
+            breaks = np.quantile(x_clean, np.arange(1, k + 1) / (k + 1))
         else:
-            breaks = np.asarray(self.breaks)
+            breaks = None
+        df = (0 if breaks is None else len(breaks)) + intercept
         
-        self.attributes['breaks'] = breaks
+        # Transformation: cut(x, c(min - 1e-4, breaks, max + 1e-4), right = FALSE)
+        edges = np.sort(np.concatenate([[x_clean.min() - 0.0001],
+                                        [] if breaks is None else breaks,
+                                        [x_clean.max() + 0.0001]]))
+        if np.any(np.diff(edges) == 0):
+            raise ValueError("'breaks' are not unique")
+        n_levels = len(edges) - 1
+        level = np.searchsorted(edges, np.where(nan_mask, edges[0], x), side='right') - 1
+        basis = np.zeros((len(x), n_levels))
+        inside = ~nan_mask & (level >= 0) & (level < n_levels)
+        basis[np.flatnonzero(inside), level[inside]] = 1.0
+        basis[~inside] = np.nan
         
-        # Create strata
-        strata = np.digitize(x, breaks)
-        n_strata = len(breaks) + 1
+        # Define the reference
+        ref = int(self.ref)
+        if ref not in range(0, basis.shape[1] + 1):
+            raise ValueError("wrong value in 'ref' argument. See help('strata')")
+        if not self.intercept and ref == 0:
+            ref = 1
+        if breaks is not None:
+            if ref != 0:
+                basis = np.delete(basis, ref - 1, axis=1)
+            if self.intercept and ref != 0:
+                basis = np.column_stack([np.ones(len(x)), basis])
         
-        # Create indicator matrix
-        basis = np.zeros((len(x), n_strata))
-        for i in range(n_strata):
-            basis[:, i] = (strata == i).astype(float)
-        
-        # Handle reference category
-        if self.ref > 0 and self.ref <= n_strata:
-            ref_idx = self.ref - 1  # Convert to 0-based
-            basis = np.delete(basis, ref_idx, axis=1)
-        
-        if self.intercept:
-            intercept_col = np.ones((len(x), 1))
-            basis = np.column_stack([intercept_col, basis])
+        # Attributes of the fitted basis (R: df, breaks, ref, intercept)
+        self.attributes['df'] = df
+        if breaks is not None:
+            self.attributes['breaks'] = breaks
+        else:
+            self.attributes.pop('breaks', None)
+        self.attributes['ref'] = ref
+        self.attributes['intercept'] = self.intercept
         
         return basis
 
