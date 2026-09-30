@@ -154,10 +154,9 @@ class MultiLocationDLNM:
         )
         
         print(f"  ✅ Meta-analysis converged: {self.mv_model.converged}")
-        
-        if self.mv_model.converged:
-            # Display some results
-            print(f"  - Between-study variance (trace): {np.trace(self.mv_model.psi):.6f}")
+
+        # The fitted values are valid whatever the optimiser's convergence flag says (the flag is reported alongside)
+        print(f"  - Between-study variance (trace): {np.trace(self.mv_model.psi):.6f}")
         
     def calculate_blups(self, vcov: bool = True) -> List[Dict]:
         """
@@ -281,7 +280,8 @@ class MultiLocationDLNM:
             'pooled_mmts': self.pooled_mmts
         }
         
-        if self.mv_model and self.mv_model.converged:
+        # Report the fit whenever one exists; 'meta_analysis_converged' carries the optimiser's flag
+        if self.mv_model and self.mv_model.psi is not None:
             summary.update({
                 'meta_analysis_loglik': self.mv_model.loglik,
                 'between_study_variance': np.trace(self.mv_model.psi),

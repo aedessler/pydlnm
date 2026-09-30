@@ -25,8 +25,11 @@ Theme N2   agreement with R is optimiser-limited (~1e-5 against R's default cont
                   what IS true: identical objective / gradient / BLUP algebra at identical Psi (1e-10), agreement to
                   <= 1e-6 with R run at reltol = 1e-14, and <= 1e-4 with R's default control.
 
-Tests decorated with @known_defect assert the R-faithful behaviour and fail today (strict xfail); the plain tests guard
-behaviour that is already faithful and must keep passing while the fixes land.
+Status: N1a-N1c are fixed (no test marked as a known defect) and N2 is resolved for the code: the meta_analysis.py
+docstring now states the measured precision. The one remaining @known_defect, test_readme_precision_claims_for_the_
+mvmeta_stage_match_measurement, checks the README (owned by the project owner, not edited here): it stays xfail until the
+README lines that claim machine precision / "Exact match" for the MVMeta stage are qualified. The plain tests guard
+behaviour that was already faithful and must keep passing.
 
 Notes for whoever fixes these
   * mvmeta-est-3: R-faithful means matching R's fit, so the "clear ValueError on NaN" first step is not enough to
@@ -253,7 +256,6 @@ def r_par(L):
 # --------------------------------------------------------------------------------------------------------------
 # N1a  mvmeta-est-1: estimation method dispatch
 # --------------------------------------------------------------------------------------------------------------
-@known_defect('N1a', 'mvmeta-est-1', note="only 'reml' is tested; every other string runs the ML objective")
 @pytest.mark.parametrize('method', ['foo', 'REML', 'ML', 'Reml'])
 @pytest.mark.parametrize('entry', ['MVMeta', 'mvmeta'])
 def test_invalid_method_name_raises_like_r(method, entry):
@@ -272,7 +274,6 @@ def test_invalid_method_name_raises_like_r(method, entry):
                 ma.mvmeta(y, S, X, method=method)
 
 
-@known_defect('N1a', 'mvmeta-est-1', note="'fixed' returns a random-effects ML fit")
 def test_fixed_method_is_gls_with_zero_psi_like_r():
     """R mvmeta.fixed: GLS with Psi = 0, no Psi in the result, logLik = -0.5 n log(2 pi) + pdet + pres."""
     y, S, X = sim(30, 2, 2, 0.4, 5)
@@ -285,7 +286,6 @@ def test_fixed_method_is_gls_with_zero_psi_like_r():
     assert m.psi is None or np.allclose(m.psi, 0.0), 'a fixed-effects fit has no between-study covariance'
 
 
-@known_defect('N1a', 'mvmeta-est-1', note="'mm' and 'vc' are not implemented but return ML numbers")
 @pytest.mark.parametrize('method', ['mm', 'vc'])
 def test_mm_and_vc_match_r_or_are_refused(method):
     """R implements the method-of-moments ('mm') and variance-components ('vc') estimators; PyDLNM must either
@@ -306,7 +306,6 @@ def test_mm_and_vc_match_r_or_are_refused(method):
 # --------------------------------------------------------------------------------------------------------------
 # N1b  mvmeta-est-4: S in R's vech-row layout
 # --------------------------------------------------------------------------------------------------------------
-@known_defect('N1b', 'mvmeta-est-4', note='every 2-D S is treated as (n,k) variances')
 @pytest.mark.parametrize('k', [2, 3, 4])
 def test_vech_row_S_matches_r(k):
     """R mvmeta accepts S as an (n, k(k+1)/2) matrix of vech rows (xpndMat, column-wise lower triangle)."""
@@ -369,7 +368,6 @@ def _nan_case(kind):
     return y, S, X, 40
 
 
-@known_defect('N1b', 'mvmeta-est-3', note='NaN raises ValueError/LinAlgError; R drops NA rows and masks missing outcomes')
 @pytest.mark.parametrize('method', ['reml', 'ml'])
 @pytest.mark.parametrize('kind', ['whole_study', 'covariate', 'outcome'])
 def test_missing_values_are_handled_like_r(kind, method):
@@ -392,7 +390,6 @@ UNDERDETERMINED = [(4, 2, 5, 'reml'), (4, 2, 5, 'ml'), (2, 3, 4, 'reml'), (2, 3,
                    (2, 1, 3, 'ml'), (2, 2, 3, 'reml')]
 
 
-@known_defect('N1b', 'mvmeta-est-5', note='returns loglik=-1e10 / meaningless finite values instead of an error')
 @pytest.mark.parametrize('n,k,p,method', UNDERDETERMINED,
                          ids=[f'n{a}k{b}p{c}-{d}' for a, b, c, d in UNDERDETERMINED])
 def test_underdetermined_meta_regression_raises_like_r(n, k, p, method):
@@ -446,7 +443,6 @@ def _mismatch_case(which):
     return y[:29], S[:29], X, f'mvmeta({NAMES}y29 ~ {NAMES}x30, S={NAMES}Sm29)'
 
 
-@known_defect('N1b', 'mvmeta-est-7', note='extra rows in X or S are silently ignored (truncated to len(y))')
 @pytest.mark.parametrize('which', ['X_extra', 'S3_extra', 'S2_extra', 'study_dropped'])
 def test_extra_rows_in_X_or_S_raise_like_r(which):
     y, S, X, rcode = _mismatch_case(which)
@@ -474,7 +470,6 @@ def test_too_few_rows_in_X_or_S_raise(which):
 # --------------------------------------------------------------------------------------------------------------
 # N1c  mvmeta-est-2: converged flag and spurious warning
 # --------------------------------------------------------------------------------------------------------------
-@known_defect('N1c', 'mvmeta-est-2', note='result.success of BFGS with gtol=1e-8; ML has no analytic gradient')
 @pytest.mark.parametrize('method', ['reml', 'ml'])
 def test_converged_flag_true_on_typical_fits(method):
     """R reports converged=TRUE for these fits and the estimates agree with tightly converged R (see the plain
@@ -489,7 +484,6 @@ def test_converged_flag_true_on_typical_fits(method):
     assert not bad, f'converged=False for {bad}'
 
 
-@known_defect('N1c', 'mvmeta-est-2', note="UserWarning 'Desired error not necessarily achieved due to precision loss'")
 @pytest.mark.parametrize('method', ['reml', 'ml'])
 def test_no_spurious_convergence_warning_on_typical_fits(method):
     bad = {}
@@ -521,7 +515,6 @@ def _stub_multilocation(seed, n=20, k=3):
     return ml, y, S, X
 
 
-@known_defect('N1c', 'mvmeta-blup-6', 'mvmeta-est-2', note='get_summary() only reports results when converged is True')
 @pytest.mark.parametrize('method', ['reml', 'ml'])
 def test_get_summary_keeps_meta_results_on_real_fits(method, capsys):
     """A completed fit_meta_analysis() must expose loglik / trace(Psi) / coefficients in get_summary() and print the
@@ -538,7 +531,6 @@ def test_get_summary_keeps_meta_results_on_real_fits(method, capsys):
     assert not bad, f'(seed, converged, missing summary keys, variance printed): {bad}'
 
 
-@known_defect('N1c', 'mvmeta-blup-6', note='root cause: results are gated on the flag in get_summary()')
 def test_get_summary_reports_results_even_if_flag_is_false():
     """Forced flag: a valid fit whose converged flag is False (as scipy reports on flat likelihoods) must still be
     summarised, with meta_analysis_converged=False carried along."""
@@ -768,6 +760,156 @@ def test_england_wales_second_stage_default_r_level(ew_first_stage):
     b, bv = py_blup(m)
     assert_close(b, rb['blup'], rtol=1e-4, what='BLUP')
     assert_close(bv, rb['bvcov'], rtol=1e-4, what='BLUP vcov')
+
+
+# --------------------------------------------------------------------------------------------------------------
+# Added with the fixes: what the N1a / N1b / N1c work made faithful (plain tests, all against R at run time)
+# --------------------------------------------------------------------------------------------------------------
+def _check_objective_and_gradients(y, S, X, reps=3, tau=0.3, seed=1):
+    """-fn equals R's remlprof.fn / mlprof.fn and -gr R's remlprof.gr / mlprof.gr at the same Psi (random lower-Cholesky
+    parameters; missing outcomes masked study by study on both sides). Python's row-major parameter order is mapped to
+    R's column-wise one explicitly."""
+    import meta_analysis as ma
+    k = y.shape[1]
+    push(y, S, X)
+    r(f'{NAMES}L <- {NAMES}lists(as.matrix({NAMES}X), as.matrix({NAMES}y), as.matrix({NAMES}Sv))')
+    data = ma._prepare(y, S, X, ma._mvmeta_control(None))
+    Xl, yl, Sl, nal = ma._study_lists(data['y'], data['S'], data['X'])
+    rng = np.random.default_rng(seed)
+    ti = np.tril_indices(k)
+    order_py = list(zip(*ti))
+    order_r = [(a, b) for b in range(k) for a in range(b, k)]
+    for rep in range(reps):
+        L = np.tril(rng.normal(size=(k, k))) * tau
+        par_py = L[ti]
+        np2r(NAMES + 'par', r_par(L))
+        for what, fn, gr in [('remlprof', ma._reml_fn, ma._reml_gr), ('mlprof', ma._ml_fn, ma._ml_gr)]:
+            ref = float(r(f'{NAMES}prof({NAMES}par, {NAMES}L, "{what}.fn")')[0])
+            assert_close(np.array([-fn(par_py, k, Xl, yl, Sl, nal)]), np.array([ref]), rtol=1e-10,
+                         what=f'{what}.fn at rep {rep}')
+            g_py = -gr(par_py, k, Xl, yl, Sl, nal)                       # gradient of the log-likelihood, Python order
+            g_py_in_r = np.array([g_py[order_py.index(ab)] for ab in order_r])
+            g_r = r2np(r(f'{NAMES}prof({NAMES}par, {NAMES}L, "{what}.gr")')).ravel()
+            assert_close(g_py_in_r, g_r, rtol=1e-10, what=f'{what}.gr at rep {rep}')
+
+
+@pytest.mark.parametrize('cfg', CFGS + [CFG_K5], ids=CFG_IDS + ['n40k5p3'])
+def test_ml_gradient_equals_rs_mlprof_gr_and_reml_gradient_still_does(cfg):
+    """N1c: the analytic ML gradient (REML gradient without the tr(inv(X'WX) X_j' W dPsi W X_j) term) equals
+    mvmeta:::mlprof.gr (gradchol.ml) at identical Psi, like the REML one equals remlprof.gr."""
+    n, k, p, tau, seed = cfg
+    y, S, X = sim(n, k, p, tau, seed)
+    _check_objective_and_gradients(y, S, X, tau=tau, seed=2000 + seed)
+
+
+def test_objective_and_gradients_with_missing_outcomes_match_r_at_identical_psi():
+    """N1b: the per-study masking of missing outcomes in the GLS, the objective and both gradients is R's."""
+    y, S, X, _ = _nan_case('outcome')
+    _check_objective_and_gradients(y, S, X)
+
+
+@pytest.mark.parametrize('method', ['fixed', 'mm', 'vc'])
+@pytest.mark.parametrize('cfg', CFGS[:3], ids=CFG_IDS[:3])
+def test_fixed_mm_and_vc_are_exact_ports_of_r(cfg, method):
+    """N1a: 'fixed' (GLS with Psi = 0, its logLik), 'mm' (method of moments) and 'vc' (variance components) reproduce R's
+    mvmeta.fixed / mvmeta.mm / mvmeta.vc to rounding (closed form / identical fixed-point iteration, same default
+    reltol); mm / vc have no likelihood (logLik NA in R, NaN here)."""
+    y, S, X = sim(*cfg)
+    ref = r_fit(y, S, X, method, R_DEFAULT)
+    m, msgs = py_fit(y, S, X, method)
+    assert not msgs
+    assert m.converged is True
+    assert_close(m.coefficients, ref['coef'], rtol=1e-10, what=f'{method} coefficients')
+    assert_close(m.vcov, ref['vcov'], rtol=1e-10, what=f'{method} vcov')
+    if method == 'fixed':
+        assert abs(m.loglik - ref['loglik']) <= 1e-10 * abs(ref['loglik'])
+        assert np.allclose(m.psi, 0.0)
+    else:
+        assert_close(m.psi, ref['psi'], rtol=1e-9, what=f'{method} Psi')
+        assert np.isnan(m.loglik) and np.isnan(ref['loglik'])
+
+
+@pytest.mark.parametrize('method', ['reml', 'ml', 'fixed', 'mm', 'vc'])
+@pytest.mark.parametrize('kind', ['outcome', 'whole_study', 'covariate'])
+def test_missing_data_fits_and_blups_match_r_for_every_method(kind, method):
+    """N1b: partly missing outcomes (masked per study), dropped studies / NA covariate rows: coefficients, vcov, Psi and
+    the BLUPs (with their variances; R gives the missing outcomes a variance of 1e10, PyDLNM the exact limit) equal
+    R's mvmeta() + blup(). blup() of the used studies, in input order, is what R returns (drop_omitted=True)."""
+    from meta_analysis import blup
+    y, S, X, n_used = _nan_case(kind)
+    push(y, S, X)
+    r(f'{NAMES}mv <- {NAMES}formula_fit(as.matrix({NAMES}y), as.matrix({NAMES}Sv), as.matrix({NAMES}X), '
+      f'"{method}", {R_TIGHT})')
+    p, k = X.shape[1], y.shape[1]
+    ref = _read_r_blup(n_used, p, k)
+    m, _ = py_fit(y, S, X, method)
+    assert_close(m.coefficients, ref['coef'], rtol=1e-6, what=f'{kind}/{method} coefficients')
+    assert_close(m.vcov, ref['vcov'], rtol=1e-6, what=f'{kind}/{method} vcov')
+    if method != 'fixed':
+        assert_close(m.psi, ref['psi'], rtol=1e-6, what=f'{kind}/{method} Psi')
+    res = blup(m, vcov=True, drop_omitted=True)
+    assert len(res) == n_used
+    assert_close(np.array([x['blup'] for x in res]), ref['blup'], rtol=1e-6, what='BLUP')
+    assert_close(np.array([x['vcov'] for x in res]), ref['bvcov'], rtol=1e-6, what='BLUP vcov')
+
+
+@pytest.mark.parametrize('kind', ['whole_study', 'covariate'])
+def test_blup_list_stays_aligned_with_the_input_rows_when_studies_are_dropped(kind):
+    """N1b: dropped studies are reported in m.na_action and get NaN BLUPs in the default (input-aligned) list, so callers
+    that index blup() by their own study order (MultiLocationDLNM) cannot be silently misaligned."""
+    from meta_analysis import blup
+    y, S, X, n_used = _nan_case(kind)
+    m, _ = py_fit(y, S, X)
+    dropped = 4 if kind == 'whole_study' else 3
+    assert m.na_action.tolist() == [dropped] and m.n == n_used and m.n_input == y.shape[0]
+    full = blup(m, vcov=True)
+    short = blup(m, vcov=True, drop_omitted=True)
+    assert len(full) == y.shape[0] and len(short) == n_used
+    assert np.isnan(full[dropped]['blup']).all() and np.isnan(full[dropped]['vcov']).all()
+    kept = [i for i in range(y.shape[0]) if i != dropped]
+    for a, b in zip(short, [full[i] for i in kept]):
+        assert np.array_equal(a['blup'], b['blup']) and np.array_equal(a['vcov'], b['vcov'])
+
+
+def test_vech_rows_with_missing_outcomes_equal_the_full_array():
+    """N1b: R's vech-row S (NaN where an outcome is missing) and the (n,k,k) array describe the same model."""
+    y, S, X, _ = _nan_case('outcome')
+    m_rows, _ = py_fit(y, vech_rows(S), X)
+    m_full, _ = py_fit(y, S, X)
+    assert_close(m_rows.psi, m_full.psi, rtol=1e-12, what='Psi')
+    assert_close(m_rows.coefficients, m_full.coefficients, rtol=1e-12, what='coefficients')
+
+
+def test_invalid_data_raise_like_r():
+    """N1b: infinite values, an S that is missing for an observed outcome (R: "missing pattern in 'y' and S' is not
+    consistent"), fewer than two usable studies (R: "less than 2 valid studies after exclusion of missing") and an S
+    of the wrong shape are errors with a clear message."""
+    y, S, X = sim(30, 2, 2, 0.4, 5)
+    yi = y.copy()
+    yi[2, 0] = np.inf
+    with pytest.raises(ValueError, match='infinite'):
+        py_fit(yi, S, X)
+    Sn = S.copy()
+    Sn[3, 0, 0] = np.nan
+    with pytest.raises(ValueError, match='missing pattern'):
+        py_fit(y, Sn, X)
+    y_one = np.full_like(y, np.nan)
+    y_one[0] = 1.0
+    with pytest.raises(ValueError, match='less than 2 valid studies'):
+        py_fit(y_one, S, X)
+    with pytest.raises(ValueError, match="dimensions for 'S'"):
+        py_fit(y, S[:, :1, :], X)
+
+
+def test_refit_after_a_rejected_input_keeps_the_previous_fit():
+    """A fit() that is rejected during input validation leaves the fitted model untouched."""
+    from meta_analysis import MVMeta
+    y, S, X = sim(30, 2, 2, 0.4, 5)
+    m = MVMeta().fit(y, S, X)
+    psi, coef = m.psi.copy(), m.coefficients.copy()
+    with pytest.raises(ValueError):
+        m.fit(y, S[:5], X)
+    assert np.array_equal(m.psi, psi) and np.array_equal(m.coefficients, coef)
 
 
 # --------------------------------------------------------------------------------------------------------------
