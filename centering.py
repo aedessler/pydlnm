@@ -192,8 +192,8 @@ def find_mmt(basis: CrossBasis,
     # Calculate confidence intervals
     z_score = 1.96  # 95% CI
     
-    # Check if model uses log link (for relative risks)
-    if hasattr(pred, 'model_link') and pred.model_link == 'log':
+    # Check if model uses a log or logit link (RR / OR, as crosspred's RRfit)
+    if getattr(pred, 'model_link', None) in ('log', 'logit'):
         # Relative risk scale
         mmt_rr = np.exp(mmt_fit)
         mmt_ci_low = np.exp(mmt_fit - z_score * mmt_se)
