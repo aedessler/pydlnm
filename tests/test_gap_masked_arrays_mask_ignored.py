@@ -28,7 +28,8 @@ from a masked series), crossreduce (`at`, coef), attrdl (x, cases, coef; both di
 attr_by_percentiles, MVMeta.fit (y, S, X), Rpy2GLMInterface.fit_glm / rpy2_glm.as_vector (response, covariates, weights,
 offset), utils.lagmatrix / exphist / equalknots and centering.find_mmt_blup.
 
-Tests decorated with @DEFECT assert the R-faithful behaviour and fail today (strict xfail).
+Status: fixed.  Every entry point reads user data through utils.asfloat (masked cells and nullable pandas values
+-> NaN, everything else np.asarray(dtype=float)); the tests below used to be strict xfails (@DEFECT) and now pass.
 """
 import contextlib
 import copy
@@ -38,16 +39,14 @@ import os
 import warnings
 
 import numpy as np
+import pandas as pd
 import pytest
 import rpy2.robjects as ro
 
-from rhelpers import REPO, assert_close, chicago, known_defect, np2r, r, r2np, rget
+from rhelpers import REPO, assert_close, chicago, np2r, r, r2np, rget
 
 PFX = 'gmm_'                 # prefix of every object this module creates in R's global environment
 ATTRDL_R = REPO / '2015_gasparrini_Lancet_Rcodedata-master' / 'attrdl.R'
-
-DEFECT = known_defect('GAP', 'masked_arrays_mask_ignored',
-                      note='np.asarray(x, dtype=float) drops the mask: fill values / masked cells are used as data')
 
 pytestmark = pytest.mark.filterwarnings('ignore')
 
@@ -225,7 +224,6 @@ def assert_onebasis_matches(ob, ref, what):
 
 @pytest.mark.parametrize('fill', list(FILLS))
 @pytest.mark.parametrize('name', list(ONEBASIS_SPECS))
-@DEFECT
 def test_onebasis_masked_x_equals_r_na(name, fill):
     """R onebasis() of the NA-coded series: NaN rows, range and the data-driven knots ignore the masked cells."""
     from basis import OneBasis
@@ -239,7 +237,6 @@ def test_onebasis_masked_x_equals_r_na(name, fill):
 
 
 @pytest.mark.parametrize('fill', ['netcdf', 'kept'])
-@DEFECT
 def test_onebasis_masked_matrix_is_flattened_column_wise_with_na(fill):
     """R: x <- as.vector(x) flattens a matrix column by column; masked cells are NA."""
     from basis import OneBasis
@@ -298,7 +295,6 @@ def assert_crossbasis_matches(cb, ref, what):
 
 @pytest.mark.parametrize('fill', list(FILLS))
 @pytest.mark.parametrize('name', CB_SPEC_NAMES)
-@DEFECT
 def test_crossbasis_masked_series_equals_r_na(name, fill):
     """crossbasis() of the NA-coded series: the masked days and the lag windows that contain them are NaN rows, the
     range and the data-driven knots come from the observed days only."""
@@ -313,7 +309,6 @@ def test_crossbasis_masked_series_equals_r_na(name, fill):
 
 
 @pytest.mark.parametrize('fill', ['netcdf', 'minus9999', 'kept'])
-@DEFECT
 def test_crossbasis_masked_lag_matrix_equals_r_na(fill):
     """x given as a matrix of exposure histories (n x (lag+1)), as for gridded / pre-lagged exposures."""
     from utils import lagmatrix
@@ -372,7 +367,6 @@ def assert_pred_matches(pred, ref, what, rtol=1e-8):
 
 @pytest.mark.parametrize('fill', ['netcdf', 'minus9999', 'kept'])
 @pytest.mark.parametrize('kind', ['cross', 'one'])
-@DEFECT
 def test_crosspred_masked_at_vector_drops_the_cells_like_r_na(pcase, kind, fill):
     """R mkat(): at <- sort(unique(at)) drops NA.  PyDLNM uses the fill value as an exposure to predict at."""
     from basis import OneBasis
@@ -401,7 +395,6 @@ def test_crosspred_masked_at_vector_drops_the_cells_like_r_na(pcase, kind, fill)
 
 
 @pytest.mark.parametrize('fill', ['minus9999', 'kept'])
-@DEFECT
 def test_crosspred_masked_at_matrix_gives_nan_rows_like_r_na(pcase, fill):
     """`at` as a matrix of exposure histories (n x n_lags): R keeps an NA cell as NA in matfit / allfit."""
     from prediction import crosspred
@@ -416,7 +409,6 @@ def test_crosspred_masked_at_matrix_gives_nan_rows_like_r_na(pcase, fill):
     assert_pred_matches(pred, ref, f'at matrix/{fill}')
 
 
-@DEFECT
 def test_crosspred_default_grid_of_a_basis_built_from_a_masked_fill_series(pcase):
     """End to end: CrossBasis(masked series) -> crosspred(): the default grid spans the observed range (R: range of
     the non-missing days), so predvar, allfit and matfit equal R's for the NA-coded series.  The netCDF fill value
@@ -442,7 +434,6 @@ def _default_grid_case(pcase, fill):
 
 
 @pytest.mark.parametrize('which', ['coef', 'vcov'])
-@DEFECT
 def test_crosspred_masked_coefficient_or_vcov_entry_is_rejected_like_na(pcase, which):
     """R: any(is.na(coef)) || any(is.na(vcov)) -> error 'coef/vcov not consistent'.  A masked coefficient carries a
     perfectly valid-looking number under the mask, so PyDLNM predicts with it."""
@@ -463,7 +454,6 @@ def test_crosspred_masked_coefficient_or_vcov_entry_is_rejected_like_na(pcase, w
 
 
 @pytest.mark.parametrize('fill', ['netcdf', 'kept'])
-@DEFECT
 def test_crossreduce_masked_at_equals_r_na(pcase, fill):
     """crossreduce(at=<vector with masked cells>): R's mkat drops NA; fit / se / reduced coefficients follow."""
     from crossreduce import crossreduce
@@ -483,7 +473,6 @@ def test_crossreduce_masked_at_equals_r_na(pcase, fill):
     assert_close(np.asarray(res.coef), ref['coefficients'], rtol=1e-8, what='crossreduce coef')
 
 
-@DEFECT
 def test_crossreduce_masked_coefficient_is_rejected_like_na(pcase):
     from crossreduce import crossreduce
     k = pcase['k']
@@ -558,7 +547,6 @@ def _attr_out(res, type, tot):
 @pytest.mark.parametrize('tot', [True, False], ids=['total', 'per-obs'])
 @pytest.mark.parametrize('dir', ['forw', 'back'])
 @pytest.mark.parametrize('which', ['x', 'cases', 'both'])
-@DEFECT
 def test_attrdl_masked_exposure_and_cases_equal_r_na(acase, which, dir, tot, fill):
     """attrdl(x, basis, cases): a masked exposure day makes every window that contains it NA in R; a masked case count
     is NA in the (forward moving average of the) cases.  PyDLNM attributes real numbers to them."""
@@ -575,7 +563,6 @@ def test_attrdl_masked_exposure_and_cases_equal_r_na(acase, which, dir, tot, fil
 
 
 @pytest.mark.parametrize('dir', ['forw', 'back'])
-@DEFECT
 def test_attrdl_af_with_masked_exposure_and_cases_equals_r_na(acase, dir):
     ac = acase
     ref = r_attrdl(ac, ac['x_na'], ac['cases_na'], type='af', dir=dir, tot=True)
@@ -587,7 +574,6 @@ def test_attrdl_af_with_masked_exposure_and_cases_equals_r_na(acase, dir):
     assert_close(_attr_out(res, 'af', True), ref, rtol=1e-8, what=f'attrdl af total {dir}')
 
 
-@DEFECT
 def test_attrdl_with_range_and_masked_exposure_equals_r_na(acase):
     """range=(lo, hi): exposure outside it is set to the centering value; a masked day must stay NA, not be 'outside'
     (the fill value 9.96921e36 is outside every range and would silently become the null-risk exposure)."""
@@ -601,7 +587,6 @@ def test_attrdl_with_range_and_masked_exposure_equals_r_na(acase):
     assert_close(_attr_out(res, 'an', False), ref, rtol=1e-8, what='attrdl range + masked exposure')
 
 
-@DEFECT
 def test_attrdl_masked_coefficient_gives_na_like_r(acase):
     """R attrdl with an NA coefficient returns NA; a masked coefficient (valid number under the mask) gives a number."""
     ac = acase
@@ -622,7 +607,6 @@ def test_attrdl_masked_coefficient_gives_na_like_r(acase):
 
 
 @pytest.mark.parametrize('split', ['cen', 'percentile'])
-@DEFECT
 def test_attr_heat_cold_masked_exposure_and_cases_equal_r_na(acase, split):
     """attr_heat_cold on masked input: the thresholds (percentiles of the OBSERVED exposure) and both totals equal R's
     attrdl with range = (-Inf, threshold) / (threshold, Inf)."""
@@ -645,7 +629,6 @@ def test_attr_heat_cold_masked_exposure_and_cases_equal_r_na(acase, split):
     assert_close(np.array([res['summary']['heat_an_total']]), heat, rtol=1e-8, what='heat AN total')
 
 
-@DEFECT
 def test_attr_by_percentiles_masked_exposure_equals_r_na(acase):
     """Bins [p_low, p_high) of the observed exposure: the thresholds are R's quantile(na.rm=TRUE), the totals are R
     attrdl over the bin (x == the upper threshold excluded, here by subtracting 1e-9)."""
@@ -749,7 +732,6 @@ def _mv_masks(S):
 
 @pytest.mark.parametrize('fill', ['minus9999', 'kept'])
 @pytest.mark.parametrize('with_S', [False, True], ids=['y-only', 'y-and-S'])
-@DEFECT
 def test_mvmeta_masked_outcomes_are_missing_like_na(with_S, fill):
     """A masked entry of y is a missing outcome (R: NA in y; studies keep their other outcomes); with S masked on the
     same rows/columns (R's convention for an NA outcome) the fit is the same.  PyDLNM uses the value under the mask
@@ -767,7 +749,6 @@ def test_mvmeta_masked_outcomes_are_missing_like_na(with_S, fill):
     assert_mvmeta_matches(m, ref, f'masked outcomes/{fill}/with_S={with_S}')
 
 
-@DEFECT
 def test_mvmeta_masked_covariate_drops_the_study_like_na():
     """R mvmeta(): a study with an NA covariate is dropped (na.omit).  A masked covariate keeps the study, with the
     value under the mask as its covariate."""
@@ -782,7 +763,6 @@ def test_mvmeta_masked_covariate_drops_the_study_like_na():
     assert_mvmeta_matches(m, ref, 'masked covariate')
 
 
-@DEFECT
 def test_mvmeta_masked_variance_of_an_observed_outcome_is_rejected_like_na():
     """R: an NA in S for an observed outcome -> error ('missing pattern in y and S is not consistent').  A masked
     S entry keeps its number under the mask and is used as the study's variance."""
@@ -806,7 +786,6 @@ def test_mvmeta_masked_variance_of_an_observed_outcome_is_rejected_like_na():
 # ==============================================================================================================
 @pytest.mark.parametrize('shape', ['vector', 'column'])
 @pytest.mark.parametrize('fill', list(FILLS))
-@DEFECT
 def test_as_vector_masked_cells_are_nan(shape, fill):
     """as_vector(values, n, what) is how y / weights / offset enter R's glm(): masked cells must reach R as NA."""
     from rpy2_glm import as_vector
@@ -848,7 +827,6 @@ def r_glm_block(y, other, weights, offset):
 
 
 @pytest.mark.parametrize('which', ['response', 'covariate', 'weights', 'offset'])
-@DEFECT
 def test_fit_glm_masked_inputs_are_excluded_like_na(which):
     """R glm(na.action = na.exclude) excludes every row with an NA response, covariate, weight or offset and pads the
     fitted values with NA.  PyDLNM fits the rows with the value that happens to sit under the mask."""
@@ -885,7 +863,6 @@ def test_fit_glm_masked_inputs_are_excluded_like_na(which):
 # 7. utilities: lagmatrix, exphist, equalknots, find_mmt_blup
 # ==============================================================================================================
 @pytest.mark.parametrize('fill', ['netcdf', 'kept'])
-@DEFECT
 def test_lagmatrix_masked_equals_tsmodel_lag_of_na(fill):
     """tsModel::Lag(x, 0:3) of the NA-coded series (PyDLNM utils.lagmatrix is its port)."""
     require_r('tsModel')
@@ -900,7 +877,6 @@ def test_lagmatrix_masked_equals_tsmodel_lag_of_na(fill):
 
 
 @pytest.mark.parametrize('fill', ['netcdf', 'kept'])
-@DEFECT
 def test_exphist_masked_equals_r_na(fill):
     """dlnm::exphist of the NA-coded profile: the exposure history keeps the NA cells."""
     from utils import exphist
@@ -914,7 +890,6 @@ def test_exphist_masked_equals_r_na(fill):
 
 
 @pytest.mark.parametrize('fun', ['ns', 'bs', 'strata'])
-@DEFECT
 def test_equalknots_masked_fill_value_equals_r_na(fun):
     """dlnm::equalknots of the NA-coded series: equally spaced knots over the OBSERVED range (the netCDF fill value
     under the mask stretches the range to 9.96921e36)."""
@@ -939,7 +914,6 @@ def _equalknots_case(fun, fill):
 
 
 @pytest.mark.parametrize('fill', ['netcdf', 'kept'])
-@DEFECT
 def test_find_mmt_blup_masked_series_equals_r_recipe_on_observed_days(fill):
     """Lancet 02.secondstage.R: predvar <- quantile(x, 1:99/100); bvar <- onebasis(predvar, 'bs', knots = quantile(x,
     c(10,75,90)/100), degree = 2, Boundary.knots = range(x)); minperccity <- which.min(bvar %*% blup), all on the
@@ -1027,3 +1001,81 @@ def test_masked_input_is_not_modified_by_the_entry_points(acase, fill):
     assert np.array_equal(x_m.data, data_before) and np.array_equal(x_m.mask, mask_before)
     assert np.array_equal(c_m.data, cdata_before) and np.array_equal(c_m.mask, cmask_before)
     assert attribution is not None
+
+
+# ==============================================================================================================
+# 9. nullable pandas dtypes (Int64 / Float64 / boolean with pd.NA, object columns with None / pd.NA) are NaN too
+# ==============================================================================================================
+def _nullable_series(data, mask, dtype):
+    """pandas Series of `dtype` holding `data`, with pd.NA at the masked positions."""
+    values = pd.array(np.where(mask, np.nan, data).tolist(), dtype=dtype) if dtype != 'object' else None
+    if dtype == 'object':
+        return pd.Series([pd.NA if m else v for v, m in zip(data, mask)], dtype=object)
+    return pd.Series(values)
+
+
+@pytest.mark.parametrize('dtype', ['Float64', 'object'])
+def test_asfloat_nullable_and_masked_inputs_are_nan(dtype):
+    from utils import asfloat
+    data = np.array([1.0, 2.0, 3.0, 4.0])
+    mask = np.array([False, True, False, True])
+    want = np.where(mask, np.nan, data)
+    assert_close(asfloat(_nullable_series(data, mask, dtype)), want, rtol=0, what=f'Series {dtype}')
+    assert_close(asfloat(pd.DataFrame({'a': _nullable_series(data, mask, dtype)})), want.reshape(-1, 1), rtol=0,
+                 what=f'DataFrame {dtype}')
+    assert_close(asfloat([v if not m else pd.NA for v, m in zip(data, mask)]), want, rtol=0, what='list with pd.NA')
+    assert_close(asfloat([None if m else v for v, m in zip(data, mask)]), want, rtol=0, what='list with None')
+    assert_close(asfloat(pd.array([1, pd.NA, 3], dtype='Int64')), np.array([1.0, np.nan, 3.0]), rtol=0,
+                 what='Int64 extension array')
+    assert_close(asfloat(pd.array([True, pd.NA, False], dtype='boolean')), np.array([1.0, np.nan, 0.0]), rtol=0,
+                 what='boolean extension array')
+    # a list of masked arrays keeps the masks (e.g. the per-study covariance matrices of a meta-analysis)
+    mats = [np.ma.masked_array(np.eye(2), mask=[[0, 1], [1, 0]]), np.ma.masked_array(2 * np.eye(2))]
+    got = asfloat(mats)
+    assert got.shape == (2, 2, 2) and np.isnan(got[0, 0, 1]) and np.isnan(got[0, 1, 0]) and got[1, 0, 1] == 0.0
+    # copy=True never aliases, and the masked input is left alone
+    plain, masked = np.array([1.0, 2.0]), np.ma.masked_array([1.0, 2.0], mask=[0, 1])
+    assert not np.shares_memory(asfloat(plain, copy=True), plain)
+    assert np.shares_memory(asfloat(plain), plain)
+    asfloat(masked)
+    assert masked.mask.tolist() == [False, True] and masked.data.tolist() == [1.0, 2.0]
+    assert np.isnan(asfloat(np.ma.masked)).all()
+
+
+@pytest.mark.parametrize('dtype', ['Float64', 'object'])
+def test_onebasis_nullable_series_equals_r_na(dtype):
+    from basis import OneBasis
+    x, _, mask = series(300, [10, 120, 250])
+    ref = r_onebasis(nan_coded(x, mask), 'ns', {'df': 4})
+    assert_onebasis_matches(OneBasis(_nullable_series(x, mask, dtype), 'ns', df=4), ref, f'Series {dtype}')
+
+
+@pytest.mark.parametrize('dtype', ['Float64', 'object'])
+def test_mvmeta_nullable_dataframe_outcomes_are_missing_like_na(dtype):
+    """y as a pandas DataFrame of a nullable dtype (pd.NA = a missing outcome): the fit is R's on the NA-coded y."""
+    y, S, X = sim(40, 3, 2, 0.3, 11)
+    y_mask, s_mask = _mv_masks(S)
+    ref = r_mvmeta(nan_coded(y, y_mask), np.where(s_mask, np.nan, S), X)
+    y_df = pd.DataFrame({j: _nullable_series(y[:, j], y_mask[:, j], dtype) for j in range(3)})
+    S_na = np.where(s_mask, np.nan, S)
+    m = py_mvmeta(y_df, S_na, X)
+    assert np.isnan(m.y).sum() == len(MISSING_OUTCOMES)
+    assert_mvmeta_matches(m, ref, f'nullable {dtype} outcomes')
+
+
+def test_mvmeta_nullable_covariate_drops_the_study_like_na():
+    y, S, X = sim(40, 3, 2, 0.3, 11)
+    x_mask = mask_at(X.shape, [[3, 1]])
+    ref = r_mvmeta(y, S, nan_coded(X, x_mask))
+    X_df = pd.DataFrame({j: _nullable_series(X[:, j], x_mask[:, j], 'Float64') for j in range(2)})
+    m = py_mvmeta(y, S, X_df)
+    assert m.na_action is not None and m.na_action.tolist() == [3]
+    assert_mvmeta_matches(m, ref, 'nullable covariate')
+
+
+@pytest.mark.parametrize('dtype', ['Float64', 'object'])
+def test_as_vector_nullable_series_cells_are_nan(dtype):
+    from rpy2_glm import as_vector
+    _, death, mask = series(200, [20, 77])
+    out = as_vector(_nullable_series(death, mask, dtype), 200, 'y')
+    assert_close(out, nan_coded(death, mask), rtol=0, what=f'as_vector {dtype}')

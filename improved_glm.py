@@ -9,6 +9,8 @@ The R objects of an interface (data, family, the fitted ``glm``) live in a priva
 reports, and nothing is written into R's global environment.
 """
 
+import numbers
+
 import numpy as np
 import pandas as pd
 from typing import Optional, Dict, Any
@@ -20,12 +22,46 @@ except ImportError:
     HAS_RPY2 = False
 
 from basis import CrossBasis
+from rbridge import r_locked
 from rpy2_glm import Rpy2GLMInterface, as_vector, prepare_glm_arguments, r_eval
 
 
+# pandas' own inference of an object column that holds numbers
+_NUMERIC_KINDS = ('integer', 'floating', 'mixed-integer-float', 'mixed-integer', 'decimal', 'boolean', 'complex')
+
+
+def _holds_numbers(values) -> bool:
+    """True if a Series / Index holds numbers (a numeric dtype, nullable ones included, or objects that are numbers)
+    instead of dates."""
+    dtype = values.dtype
+    if isinstance(dtype, pd.CategoricalDtype):
+        return _holds_numbers(dtype.categories)
+    if pd.api.types.is_numeric_dtype(dtype):
+        return True
+    if dtype == object:
+        kind = pd.api.types.infer_dtype(values, skipna=True)
+        if kind in _NUMERIC_KINDS:
+            return True
+        if kind == 'mixed':
+            return any(isinstance(v, numbers.Number) for v in values if not pd.isna(v))
+    return False
+
+
 def _as_datetime_series(dates, n: Optional[int] = None) -> pd.Series:
-    """Dates as a ``datetime64`` Series with a default index: Series, DatetimeIndex, ``np.datetime64`` array, list
-    of datetime / date objects or ISO strings (R: ``as.Date``). Missing dates raise ValueError."""
+    """Dates as a tz-naive ``datetime64`` Series with a default index: Series, DatetimeIndex, ``np.datetime64`` array,
+    list of datetime / date objects or ISO / yyyymmdd strings (R: ``as.Date``).
+
+    * Numbers are NOT dates and raise ValueError. R's recipe works on ``Date`` objects (``weekdays()`` and
+      ``format(date, "%Y")`` stop on a number), and a bare number is ambiguous: R Date day numbers
+      (``as.numeric(date)``, what ``chicagoNMMAPS$date`` becomes through rpy2), Python ordinals, yyyymmdd integers,
+      Excel serials and epoch seconds / milliseconds / nanoseconds cannot be told apart, whereas pandas would read
+      every integer as nanoseconds since 1970 (one calendar year, one weekday, a model fitted silently on the wrong
+      design). Convert them first, for example ``pd.to_datetime(days, unit='D')`` for R day numbers.
+    * Timezone-aware dates are reduced to their local calendar date and time of day (R: ``as.Date(x, tz = tz)``), so
+      that days of 23 or 25 hours around a daylight-saving change do not distort the spacing of the seasonal spline
+      or the weekday.
+    * Missing dates raise ValueError.
+    """
     if isinstance(dates, pd.DataFrame):
         if dates.shape[1] != 1:
             raise ValueError(f"'dates' must be a vector: got a DataFrame with {dates.shape[1]} columns")
@@ -34,12 +70,23 @@ def _as_datetime_series(dates, n: Optional[int] = None) -> pd.Series:
         dates = dates.reset_index(drop=True)
     else:
         dates = pd.Series(np.asarray(dates).ravel() if isinstance(dates, np.ndarray) else list(dates))
+    if _holds_numbers(dates):
+        raise ValueError(
+            "'dates' must hold dates (datetime64, datetime.date / datetime objects or date strings), not numbers: "
+            "a number is ambiguous (R Date day numbers, Python ordinals, yyyymmdd, Excel serials and epoch "
+            "seconds / milliseconds / nanoseconds cannot be told apart) and pandas would read it as nanoseconds since "
+            "1970. Convert it first, for example pd.to_datetime(days, unit='D') for R Date day numbers "
+            "(as.numeric(date)).")
     try:
         dates = pd.to_datetime(dates)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"'dates' cannot be converted to dates: {exc}") from exc
+    if not pd.api.types.is_datetime64_any_dtype(dates):
+        raise ValueError(f"'dates' cannot be converted to dates of a single time zone (got dtype {dates.dtype})")
     if dates.isna().any():
         raise ValueError("'dates' contains missing values")
+    if dates.dt.tz is not None:
+        dates = dates.dt.tz_localize(None)          # the local wall clock: the calendar day, whatever the DST changes
     if n is not None and len(dates) != n:
         raise ValueError(f"'dates' has length {len(dates)} but the cross-basis has {n} rows")
     return dates
@@ -65,6 +112,7 @@ class ImprovedGLMInterface(Rpy2GLMInterface):
         The cross-basis matrix object
     """
 
+    @r_locked
     def create_seasonality_basis(self, dates: pd.Series, dfseas: int = 8) -> np.ndarray:
         """
         Create seasonality basis using natural splines on date.
@@ -74,7 +122,10 @@ class ImprovedGLMInterface(Rpy2GLMInterface):
         Parameters
         ----------
         dates : pd.Series
-            Dates: Series, DatetimeIndex, datetime64 array, list of datetime/date objects or ISO strings
+            Dates: Series, DatetimeIndex, datetime64 array, list of datetime/date objects or ISO strings.
+            Numbers (R Date day numbers, ordinals, yyyymmdd, epoch) are rejected with a ValueError: convert them
+            first (e.g. ``pd.to_datetime(days, unit='D')``). Timezone-aware dates are reduced to their local
+            calendar day.
         dfseas : int, default=8
             Degrees of freedom per year for seasonality. The total, ``dfseas * number of calendar years``, is
             passed to ``ns()`` as it is (no ``round()``, as in the R code of the Lancet study): an integer
@@ -109,7 +160,8 @@ class ImprovedGLMInterface(Rpy2GLMInterface):
         Parameters
         ----------
         dates : pd.Series
-            Dates: Series, DatetimeIndex, datetime64 array, list of datetime/date objects or ISO strings
+            Dates: Series, DatetimeIndex, datetime64 array, list of datetime/date objects or ISO strings (numbers
+            are rejected with a ValueError; timezone-aware dates are reduced to their local calendar day)
         verbose : bool, default True
             Print the weekday columns and the reference level
 
@@ -131,6 +183,7 @@ class ImprovedGLMInterface(Rpy2GLMInterface):
 
         return dow_dummies.to_numpy(dtype=float)
 
+    @r_locked
     def fit_dlnm_model(self,
                        y: np.ndarray,
                        dates: pd.Series,
@@ -151,7 +204,9 @@ class ImprovedGLMInterface(Rpy2GLMInterface):
             one value per row of the cross-basis; NaN allowed
         dates : pd.Series
             Date series for seasonality and day-of-week (Series, DatetimeIndex, datetime64 array, list of
-            datetime/date objects or ISO strings), one per row of the cross-basis
+            datetime/date objects or ISO strings), one per row of the cross-basis. Numbers (R Date day numbers,
+            ordinals, yyyymmdd, epoch) are rejected with a ValueError: convert them first (e.g.
+            ``pd.to_datetime(days, unit='D')``); timezone-aware dates are reduced to their local calendar day
         dfseas : int, default=8
             Seasonal degrees of freedom per year (see ``create_seasonality_basis`` for non-integer values)
         family : str, default='quasipoisson'
@@ -222,7 +277,7 @@ def fit_enhanced_dlnm_model(crossbasis: CrossBasis,
     y : array-like
         Response variable (mortality counts)
     dates : pd.Series
-        Date series for seasonality and day-of-week
+        Date series for seasonality and day-of-week (datetimes, not numbers: see ``fit_dlnm_model``)
     dfseas : int, default=8
         Seasonal degrees of freedom per year
     family : str, default='quasipoisson'

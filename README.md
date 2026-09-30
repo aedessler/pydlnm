@@ -92,6 +92,12 @@ The audit compared the Python code with R's `dlnm`/`mvmeta` line by line and wit
 
 `penalized.py` (penalized cross-basis / penalized DLNM) and `seasonality.py` have no validated counterpart in R's `dlnm` and have open issues found by the audit (for example the REML criterion and smoothing-parameter selection of `penalized.py`, and the treatment of dates and of the cyclic spline in `seasonality.py`). They warn when used. Do not rely on them for published analyses.
 
+## Missing values, dates and threads
+
+- **Masked arrays and nullable pandas columns are NaN.** Every entry point reads user data through `utils.asfloat`: the masked cells of a `numpy.ma` array (netCDF4 / xarray `to_masked_array()` / `np.ma.masked_where`) and the `pd.NA` of `Int64` / `Float64` / `boolean` or object columns are missing values, exactly like NaN (R's `NA`). `np.asarray(x, dtype=float)` would return the raw data under the mask (a fill value such as 9.96921e36, or a genuine-looking number) and silently turn missing cells into observations. A masked coefficient or covariance entry is an NA one (`crosspred` / `crossreduce` stop like R, `attrdl` returns NaN). The caller's arrays are never modified.
+- **`dates` must be dates, not numbers.** `ImprovedGLMInterface` / `fit_enhanced_dlnm_model` / `MultiLocationDLNM.add_region_analysis` raise `ValueError` for numeric `dates` (R Date day numbers, Python ordinals, yyyymmdd, Excel serials, epoch seconds / milliseconds / nanoseconds): R's recipe works on `Date` objects and a bare number is ambiguous, while pandas reads integers as nanoseconds since 1970. Convert first, e.g. `pd.to_datetime(days, unit='D')` for R day numbers. Timezone-aware dates are reduced to their local calendar day (R: `as.Date(x, tz = tz)`), so daylight-saving changes do not distort the seasonal spline.
+- **Threads.** All R access (`rbridge.py`) runs under one re-entrant lock with an explicit rpy2 converter, and the spline temporaries live in a private R environment per call: `OneBasis`, `CrossBasis`, `crosspred`, `crossreduce` and the GLM interfaces can be called from several threads (`ThreadPoolExecutor`, joblib's threading backend, dask's threaded scheduler). The R work itself is serialised; use processes to run R in parallel. Import PyDLNM in the main thread (it starts R) before creating worker threads.
+
 ## Tests
 
 `tests/` is a differential test suite: each test runs the same computation in R (`dlnm`, `mvmeta`/`mixmeta`, via rpy2) and in PyDLNM and compares the numbers (reference values are computed by R at test time). See `tests/README.md`:
@@ -229,7 +235,8 @@ for i, location in enumerate(locations):
 ├── improved_glm.py       # GLM fitting via R (quasi-Poisson + seasonality), ImprovedGLMInterface
 ├── rpy2_glm.py, glm_integration.py   # older GLM interfaces
 ├── model_utils.py        # getcoef / getvcov / getlink, selection of a basis block (by name= or by its columns)
-├── utils.py              # mklag, seqlag, pretty, logknots, equalknots, exphist, lagmatrix
+├── utils.py              # mklag, seqlag, pretty, logknots, equalknots, exphist, lagmatrix, asfloat
+├── rbridge.py            # process-wide R lock + explicit rpy2 converter (thread-safe access to R)
 ├── penalized.py, seasonality.py      # EXPERIMENTAL (not validated against R)
 ├── tests/                # R-vs-PyDLNM differential test suite (see tests/README.md)
 └── validation/

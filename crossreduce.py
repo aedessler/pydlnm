@@ -15,7 +15,7 @@ from basis import CrossBasis, OneBasis
 from glm_integration import DLNMGLMInterface
 from model_utils import validate_model_compatibility, getlink
 from prediction import CrossPred, mkat, mkcen
-from utils import mklag, seqlag
+from utils import asfloat, mklag, seqlag
 
 
 class CrossReduce:
@@ -95,8 +95,8 @@ class CrossReduce:
 
 def _check_coef_vcov(cb_coef, cb_vcov, ncol: int):
     """R: stop unless length(coef) == ncol(basis) == dim(vcov), without missing values."""
-    cb_coef = np.asarray(cb_coef, dtype=float).ravel()
-    cb_vcov = np.atleast_2d(np.asarray(cb_vcov, dtype=float))
+    cb_coef = asfloat(cb_coef).ravel()                 # a masked / NA entry is NaN: rejected below
+    cb_vcov = np.atleast_2d(asfloat(cb_vcov))
     if (len(cb_coef) != ncol or cb_vcov.shape != (ncol, ncol) or np.isnan(cb_coef).any()
             or np.isnan(cb_vcov).any()):
         raise ValueError("coef/vcov do not consistent with basis matrix. See help(crossreduce)")
@@ -184,8 +184,8 @@ def crossreduce(basis: Union[CrossBasis, DLNMGLMInterface],
         cb_coef, cb_vcov = basis.get_crossbasis_coefficients()
         if cb_coef is None or cb_vcov is None:
             raise ValueError("the GLM interface has no fitted model: call fit_glm() or fit_dlnm_model() first")
-        cb_coef = np.asarray(cb_coef, dtype=float)
-        cb_vcov = np.asarray(cb_vcov, dtype=float)
+        cb_coef = asfloat(cb_coef)
+        cb_vcov = asfloat(cb_vcov)
         if np.isnan(cb_coef).any() or np.isnan(cb_vcov).any():
             raise ValueError("coef/vcov do not consistent with basis matrix. See help(crossreduce)")
         
@@ -205,8 +205,8 @@ def crossreduce(basis: Union[CrossBasis, DLNMGLMInterface],
             
         elif coef is not None and vcov is not None:
             # Direct coefficient and variance-covariance input
-            cb_coef = np.asarray(coef)
-            cb_vcov = np.asarray(vcov)
+            cb_coef = asfloat(coef)
+            cb_vcov = asfloat(vcov)
             model_info = {'type': 'direct'}
             
         else:
@@ -247,11 +247,11 @@ def crossreduce(basis: Union[CrossBasis, DLNMGLMInterface],
     n_basis = cb_obj.shape[1]
     
     def lag_basis_at(values) -> np.ndarray:
-        values = np.atleast_1d(np.asarray(values, dtype=float))
+        values = np.atleast_1d(asfloat(values))
         return OneBasis(values, **arglag).basis        # 'integer' rebuilds its indicator rows from the fitted values
     
     def var_basis_at(values) -> np.ndarray:
-        basis_var = OneBasis(np.atleast_1d(np.asarray(values, dtype=float)), **argvar).basis
+        basis_var = OneBasis(np.atleast_1d(asfloat(values)), **argvar).basis
         if cen is not None:
             basis_var = basis_var - OneBasis([cen], **argvar).basis
         return basis_var

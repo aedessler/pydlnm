@@ -23,7 +23,7 @@ from basis import CrossBasis, OneBasis
 from prediction import mkxpred
 from centering import find_mmt
 from model_utils import validate_model_compatibility
-from utils import lagmatrix, seqlag
+from utils import asfloat, lagmatrix, seqlag
 
 
 def _match_arg(value: Any, choices: Tuple[str, ...], name: str) -> str:
@@ -49,7 +49,7 @@ def _resolve_coef_vcov(basis: CrossBasis, model: Optional[Any], coef, vcov,
         return info['coef'], info['vcov']
     if coef is None or vcov is None:
         raise ValueError("arguments 'basis' do not match 'model' or 'coef'-'vcov'")
-    return np.asarray(coef, dtype=float).ravel(), np.atleast_2d(np.asarray(vcov, dtype=float))
+    return asfloat(coef).ravel(), np.atleast_2d(asfloat(vcov))
 
 
 def _resolve_cen(cen: Optional[float], basis: CrossBasis) -> float:
@@ -126,8 +126,8 @@ def attrdl(x: np.ndarray,
     type = _match_arg(type, ("an", "af", "both"), "type")
     dir = _match_arg(dir, ("back", "forw"), "dir")
 
-    x = np.array(x, dtype=float)            # copies: the inputs are never modified
-    cases = np.array(cases, dtype=float)
+    x = asfloat(x, copy=True)               # copies: the inputs are never modified; masked cells are NaN (R's NA)
+    cases = asfloat(cases, copy=True)
     if sub is not None:
         sub = np.asarray(sub, dtype=bool)
         if len(sub) != len(x):
@@ -230,7 +230,7 @@ def _simulate_totals(x_all: np.ndarray, cases: np.ndarray, den: float, coef: np.
     """Simulated total AF/AN: coefficients drawn with the eigen decomposition of vcov (as R's attrdl); the design
     matrix is built once and each draw costs one matrix product."""
     k = len(coef)
-    values, vectors = np.linalg.eigh(np.asarray(vcov, dtype=float))
+    values, vectors = np.linalg.eigh(asfloat(vcov))
     root = vectors * np.sqrt(np.clip(values, 0.0, None))          # vectors %*% diag(sqrt(values))
     z = np.random.standard_normal((nsim, k))
     coef_sim = coef[:, None] + root @ z.T                         # k x nsim
@@ -276,7 +276,7 @@ def attr_heat_cold(x: np.ndarray,
     cross-basis in ``model`` (see ``attrdl``).
     """
     split = _match_arg(split, ("cen", "percentile"), "split")
-    x = np.asarray(x, dtype=float)
+    x = asfloat(x)                      # masked / nullable cells are NaN (R's NA)
     cen = _resolve_wrapper_cen(cen, basis, model, coef, vcov, name)
 
     if split == "cen":
@@ -333,7 +333,7 @@ def attr_by_percentiles(x: np.ndarray,
     if percentile_ranges is None:
         percentile_ranges = [(0, 1), (1, 5), (5, 10), (90, 95), (95, 99), (99, 100)]
 
-    x = np.asarray(x, dtype=float)
+    x = asfloat(x)                      # masked / nullable cells are NaN (R's NA)
     cen = _resolve_wrapper_cen(cen, basis, model, coef, vcov, name)
     results = {}
 
@@ -379,9 +379,9 @@ class AttributionManager:
                  model: Optional[Any] = None, coef: Optional[np.ndarray] = None,
                  vcov: Optional[np.ndarray] = None, name: Optional[str] = None):
         """Initialize attribution manager (``name``: name of the cross-basis in ``model``, see ``attrdl``)"""
-        self.x = np.asarray(x)
+        self.x = asfloat(x)                      # masked / nullable cells are NaN (R's NA)
         self.basis = basis
-        self.cases = np.asarray(cases)
+        self.cases = asfloat(cases)
         self.model = model
         self.coef = coef
         self.vcov = vcov

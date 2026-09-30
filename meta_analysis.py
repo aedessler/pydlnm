@@ -63,6 +63,8 @@ import numpy as np
 from scipy import linalg
 from scipy.optimize import minimize
 
+from utils import asfloat
+
 
 _EPS = float(np.finfo(float).eps)
 _SQRT_EPS = math.sqrt(_EPS)
@@ -222,7 +224,8 @@ def _inputcov(sd: np.ndarray, cor) -> np.ndarray:
 
 def _as_array(a, name):
     try:
-        return np.array(a, dtype=float)             # always a copy: the fitted model owns its data
+        return asfloat(a, copy=True)                # always a copy: the fitted model owns its data; a masked or
+                                                    # <NA> cell is a missing value (NaN), as R's NA
     except (TypeError, ValueError) as exc:
         raise ValueError(f"'{name}' could not be converted to a numeric array: {exc}") from None
 

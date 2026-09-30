@@ -11,6 +11,7 @@ mask nor be overwritten by them, and nothing is written into R's global environm
 
 import inspect
 import re
+import sys
 import warnings
 from typing import Optional, Any, Dict, List, Tuple
 
@@ -28,6 +29,8 @@ except ImportError:
 
 from basis import CrossBasis
 from model_utils import locate_block
+from rbridge import R_LOCK, r_locked
+from utils import asfloat
 
 
 # Name of the response column in the R data frame (``death ~ cb + ...`` as in the DLNM examples)
@@ -60,25 +63,31 @@ _CONTROL_ARGUMENTS = ('epsilon', 'maxit', 'trace')
 # --------------------------------------------------------------------------------------------------------------
 # private R environment
 # --------------------------------------------------------------------------------------------------------------
+# Every function below that touches R runs under the process-wide R lock with an explicit rpy2 converter (see
+# ``rbridge``), so the interfaces can be used from several Python threads.
+@r_locked
 def new_r_environment():
     """A fresh R environment whose parent is ``baseenv()`` (functions of other packages are called as ``pkg::f``)."""
     return ro.baseenv['new.env'](parent=ro.baseenv)
 
 
+@r_locked
 def r_eval(env, code: str):
     """Evaluate R code in the private environment ``env``."""
     return ro.baseenv['eval'](ro.baseenv['parse'](text=code), env)
 
 
+@r_locked
 def r_function(name: str):
     """``pkg::name`` as a callable (evaluated in the base environment: user-defined R objects cannot mask it)."""
     return r_eval(ro.baseenv, name)
 
 
+@r_locked
 def r_data_frame(columns: Dict[str, np.ndarray]):
     """R data.frame with exactly these column names (no ``make.names``) from a dict of float vectors."""
     n_rows = len(next(iter(columns.values())))
-    frame = ro.ListVector({name: ro.FloatVector(np.asarray(values, dtype=float)) for name, values in columns.items()})
+    frame = ro.ListVector({name: ro.FloatVector(asfloat(values)) for name, values in columns.items()})
     return ro.baseenv['structure'](frame, **{'class': 'data.frame',
                                              'row.names': ro.IntVector(range(1, n_rows + 1))})
 
@@ -92,42 +101,38 @@ def r_quote(name: str) -> str:
 # input handling shared by the interfaces
 # --------------------------------------------------------------------------------------------------------------
 def as_vector(values, n: int, what: str) -> np.ndarray:
-    """A numeric vector of length ``n``: list, array, column vector (n, 1), Series or one-column DataFrame."""
+    """A numeric vector of length ``n``: list, array, column vector (n, 1), Series or one-column DataFrame. Masked
+    cells of a numpy masked array and missing values of nullable pandas columns become NaN (R's ``NA``), which
+    ``glm(na.action = na.exclude)`` excludes."""
     if isinstance(values, pd.DataFrame):
         if values.shape[1] != 1:
             raise ValueError(f"'{what}' must be a vector: got a DataFrame with {values.shape[1]} columns")
         values = values.iloc[:, 0]
-    if isinstance(values, pd.Series):
-        values = values.to_numpy()
-    arr = np.asarray(values)
+    try:
+        arr = asfloat(values)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"'{what}' must be numeric: {exc}") from exc
     if arr.ndim == 2 and 1 in arr.shape:
         arr = arr.ravel()
     if arr.ndim != 1:
         raise ValueError(f"'{what}' must be a vector, got an array of shape {arr.shape}")
-    try:
-        arr = arr.astype(float)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"'{what}' must be numeric: {exc}") from exc
     if len(arr) != n:
         raise ValueError(f"'{what}' has length {len(arr)} but the cross-basis has {n} rows")
     return arr
 
 
 def as_covariates(other_vars, n: int) -> Optional[np.ndarray]:
-    """Additional covariates as a float matrix (n, k), or None."""
+    """Additional covariates as a float matrix (n, k), or None. Masked / nullable cells become NaN (R's ``NA``)."""
     if other_vars is None:
         return None
-    if isinstance(other_vars, (pd.DataFrame, pd.Series)):
-        other_vars = other_vars.to_numpy()
-    arr = np.asarray(other_vars)
+    try:
+        arr = asfloat(other_vars)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"'other_vars' must be numeric: {exc}") from exc
     if arr.ndim == 1:
         arr = arr.reshape(-1, 1)
     if arr.ndim != 2:
         raise ValueError(f"'other_vars' must be a vector or a matrix, got an array of shape {arr.shape}")
-    try:
-        arr = arr.astype(float)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"'other_vars' must be numeric: {exc}") from exc
     if arr.shape[0] != n:
         raise ValueError(f"'other_vars' has {arr.shape[0]} rows but the cross-basis has {n} rows")
     return arr
@@ -159,6 +164,7 @@ def check_covariate_names(names, k: int, taken) -> List[str]:
     return names
 
 
+@r_locked
 def resolve_family(family):
     """The R family for glm(): a name from the documented list (case-insensitive; ``'gamma'`` is R's ``Gamma``) or an
     R family object / family function obtained through rpy2. Other strings are rejected instead of being pasted into
@@ -174,6 +180,7 @@ def resolve_family(family):
     raise TypeError(f"'family' must be a family name or an R family object, got {type(family).__name__}")
 
 
+@r_locked
 def prepare_glm_arguments(kwargs: Dict[str, Any], n: int) -> Dict[str, Any]:
     """Validate the keyword arguments that are passed on to R's glm(): ``weights``, ``offset``, ``subset``
     (length-n vectors; ``subset`` is a boolean mask or integer positions, zero-based) and ``control`` (a dict of
@@ -224,8 +231,8 @@ def reduce_cross_basis(crossbasis: CrossBasis, coef, vcov, cen: Optional[float],
     """crossreduce() of the cross-basis block of a fitted interface. Stops like R's crossreduce() when the block has
     missing values (aliased, i.e. not estimable, coefficients). ``model_link`` (link of the fitted model) is
     forwarded when ``crossreduce()`` accepts it, so that log/logit models also get relative risks."""
-    coef = np.asarray(coef, dtype=float)
-    vcov = np.asarray(vcov, dtype=float)
+    coef = asfloat(coef)
+    vcov = asfloat(vcov)
     if np.isnan(coef).any() or np.isnan(vcov).any():
         raise ValueError(
             "coef/vcov do not consistent with basis matrix. See help(crossreduce): the cross-basis block of the "
@@ -284,6 +291,19 @@ class Rpy2GLMInterface:
         # Initialize R environment
         self._setup_r_environment()
 
+    def __del__(self):
+        # Release the R objects of this instance (the fitted glm, its private environment) under the R lock: the
+        # interface is usually dropped by whichever thread ran the analysis, while other threads may be inside R.
+        if sys.is_finalizing():
+            return
+        try:
+            with R_LOCK:
+                self.r_model = None
+                self._env = None
+        except Exception:                      # noqa: BLE001  (a finaliser must not raise)
+            pass
+
+    @r_locked
     def _setup_r_environment(self):
         """Set up the R interface and the private environment of this instance"""
 
@@ -303,6 +323,7 @@ class Rpy2GLMInterface:
         n_lag_basis = self.crossbasis.df[1]
         return [f'cb.v{(i // n_lag_basis) + 1}.l{(i % n_lag_basis) + 1}' for i in range(n_columns)]
 
+    @r_locked
     def _fit_r_model(self, y: np.ndarray, other: Optional[np.ndarray], other_names: Optional[List[str]],
                      family, glm_arguments: Dict[str, Any]):
         """Fit ``glm(death ~ cb + other)`` in the private environment and extract the cross-basis block.
@@ -343,6 +364,7 @@ class Rpy2GLMInterface:
         self._extract_cb_coefficients(cb_terms)
         return self.r_model
 
+    @r_locked
     def fit_glm(self,
                 y: np.ndarray,
                 family: str = 'quasipoisson',
@@ -390,6 +412,7 @@ class Rpy2GLMInterface:
                                           [RESPONSE] + self._cross_basis_terms(int(np.shape(self.crossbasis.basis)[1])))
         return self._fit_r_model(y, other, names, family, glm_arguments)
 
+    @r_locked
     def _extract_cb_coefficients(self, cb_names: List[str]):
         """Cross-basis coefficients and variance-covariance matrix from the R model, selected by their exact names
         (NaN for coefficients that R could not estimate because the design is rank deficient)"""
@@ -429,6 +452,7 @@ class Rpy2GLMInterface:
         return (a is not None and b is not None and np.shape(a) == np.shape(b)
                 and bool(np.array_equal(np.asarray(a, dtype=float), np.asarray(b, dtype=float), equal_nan=True)))
 
+    @r_locked
     def select_block(self, basis, name: Optional[str] = None, kind: str = 'cb', ncol: Optional[int] = None,
                      label: str = 'basis') -> Tuple[np.ndarray, np.ndarray]:
         """Coefficients and variance-covariance matrix of the terms of ``basis`` in the fitted R model.
@@ -448,6 +472,7 @@ class Rpy2GLMInterface:
         idx = locate_block(self._all_names, len(self._all_names), ncol, kind, label, basis, name, exog)
         return self._all_coef[idx], self._all_vcov[np.ix_(idx, idx)]
 
+    @r_locked
     def get_model_summary(self):
         """Get the R summary of the model fitted by this instance (``summary(glm)``: an R list)"""
         if self.r_model is None:
@@ -455,6 +480,7 @@ class Rpy2GLMInterface:
 
         return ro.baseenv['summary'](self.r_model)
 
+    @r_locked
     def fitted(self) -> np.ndarray:
         """Fitted values of the model on the response scale, one per input row: NaN for the rows R excluded
         (``na.action = na.exclude`` pads them like R's ``fitted()``)."""

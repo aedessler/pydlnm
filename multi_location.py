@@ -14,6 +14,7 @@ from improved_glm import fit_enhanced_dlnm_model
 from meta_analysis import mvmeta, blup
 from basis import CrossBasis, OneBasis
 from centering import find_mmt_blup
+from utils import asfloat
 
 
 def _mmt_from_blup(x: np.ndarray, blup_coef: np.ndarray, argvar: Dict[str, Any],
@@ -34,9 +35,9 @@ def _mmt_from_blup(x: np.ndarray, blup_coef: np.ndarray, argvar: Dict[str, Any],
         If the number of BLUP coefficients differs from the number of columns of the basis (R: non-conformable
         arguments), or the risks are all NaN (R: ``which.min`` gives ``integer(0)``).
     """
-    x = np.asarray(x, dtype=float).ravel()
+    x = asfloat(x).ravel()
     x = x[~np.isnan(x)]
-    blup_coef = np.asarray(blup_coef, dtype=float).ravel()
+    blup_coef = asfloat(blup_coef).ravel()
     
     percentiles = np.arange(percentile_range[0], percentile_range[1] + 1)
     predvar = np.percentile(x, percentiles)                     # R: quantile(x, 1:99/100), type 7
@@ -104,7 +105,8 @@ class MultiLocationDLNM:
         y : array-like
             Response variable (mortality counts): list, array, Series, NaN allowed
         dates : pd.Series
-            Date series for seasonality (Series, DatetimeIndex, datetime64 array, list of dates)
+            Date series for seasonality (Series, DatetimeIndex, datetime64 array, list of dates; numbers such as R
+            Date day numbers are rejected with a ValueError, see ``ImprovedGLMInterface.fit_dlnm_model``)
         dfseas : int, default=8
             Seasonal degrees of freedom per year
         family : str, default='quasipoisson'

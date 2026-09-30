@@ -19,11 +19,12 @@ tests accept either:
 A SILENT fit that differs from R is the defect.  The 'epoch nanoseconds' case is the one numeric encoding that
 pandas reads correctly, so it must keep giving R's numbers (or be rejected).
 
-Defects (one root cause, improved_glm.py:_as_datetime_series):
-  * numeric day numbers / ordinals / yyyymmdd / Excel serials / epoch s / epoch ms: pd.to_datetime(int) == ns
-    (-> tests marked known_defect('GAP', 'numeric_dates_silently_misread'))
-  * tz-aware dates across a DST change: (dates - dates.min()) / Timedelta(days=1) is fractional
-    (-> the DST tests are marked known_defect as well; UTC and Asia/Kolkata, which have no DST, are plain tests)
+Status: fixed in improved_glm._as_datetime_series (these tests used to be strict xfails):
+  * numeric day numbers / ordinals / yyyymmdd / Excel serials / epoch s / ms / ns are REJECTED with a ValueError that
+    explains the ambiguity (R itself has no numeric-date path; a bare number cannot be told from the other encodings,
+    and pd.to_datetime(int) reads nanoseconds since 1970: one year, one weekday)
+  * tz-aware dates are reduced to their local calendar day and time of day (R: as.Date(x, tz = tz)), so a DST change
+    no longer gives 23 / 25-hour spacing in the seasonal ns() basis.
 
 All cases use 3 full calendar years (1987-1989, n = 1096) of R's chicagoNMMAPS, bs2 x ns(logknots) lag 21,
 dfseas = 6, quasi-Poisson, so that n_years = 3 distinguishes the correct reading (18 seasonal df + 6 weekday dummies)
@@ -37,11 +38,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from rhelpers import assert_close, chicago, known_defect, max_rel_diff, np2r, r, r2np, rget
+from rhelpers import assert_close, chicago, max_rel_diff, np2r, r, r2np, rget
 import rpy2.robjects as ro
 
-GAP = 'GAP'
-KEY = 'numeric_dates_silently_misread'
 LAG = 21
 DFSEAS = 6
 N_ROWS = 1096                     # 1987-01-01 .. 1989-12-31 (three complete calendar years, 1988 is a leap year)
@@ -212,19 +211,8 @@ def encodings():
     }
 
 
-def _as_param_marks(mark):
-    """pytest.param(marks=...) cannot take the no-op usefixtures() mark that known_defect() returns when
-    PYDLNM_XFAIL_OFF=1 is set: use an empty list then."""
-    return [] if getattr(mark, 'name', '') == 'usefixtures' else [mark]
-
-
-DEFECT_NUMERIC = known_defect(GAP, KEY, note='pd.to_datetime reads integers as nanoseconds since 1970: one year, one weekday')
-NUMERIC_MARKS = _as_param_marks(DEFECT_NUMERIC)
-NUMERIC_KINDS = [
-    pytest.param(k, marks=NUMERIC_MARKS) if k != 'epoch nanoseconds' else k
-    for k in ('R day numbers int64', 'R day numbers float64', 'Python ordinals', 'yyyymmdd integers', 'Excel serials',
-              'epoch seconds', 'epoch milliseconds', 'epoch nanoseconds')
-]
+NUMERIC_KINDS = ['R day numbers int64', 'R day numbers float64', 'Python ordinals', 'yyyymmdd integers', 'Excel serials',
+                 'epoch seconds', 'epoch milliseconds', 'epoch nanoseconds']
 CONTAINERS = {
     'ndarray': lambda v: v,
     'Series': lambda v: pd.Series(v),
@@ -253,9 +241,39 @@ def test_baseline_datetime_dates_give_R_fit():
 
 
 def test_epoch_nanosecond_integers_are_the_one_numeric_encoding_pandas_reads_right():
-    """Integers ARE datetimes when they are epoch nanoseconds (pandas' own convention): either rejected or R's fit."""
+    """Integers ARE datetimes when they are epoch nanoseconds (pandas' own convention): either rejected or R's fit
+    (PyDLNM rejects every number, see test_numeric_dates_are_rejected_with_a_clear_message)."""
     v = encodings()['epoch nanoseconds']
     raise_or_match(lambda: fit_improved(v), lambda g, w: assert_fit_is_R(g, w), 'epoch nanoseconds')
+
+
+def test_numeric_dates_are_rejected_with_a_clear_message():
+    """The documented rule of PyDLNM: numbers are not dates (R works on Date objects and a bare number is ambiguous);
+    every encoding, in every container, stops with a ValueError that names the problem -- never a silent fit."""
+    from improved_glm import ImprovedGLMInterface, _as_datetime_series
+    s = sc()
+    iface = ImprovedGLMInterface(s.cb)
+    for kind, v in encodings().items():
+        for container in ('ndarray', 'Series', 'list', 'object Series', 'nullable Int64 Series'):
+            if container == 'nullable Int64 Series' and kind == 'R day numbers float64':
+                continue
+            values = CONTAINERS[container](v)
+            for call in (lambda: _as_datetime_series(values), lambda: iface.create_seasonality_basis(values, DFSEAS),
+                         lambda: iface.create_dow_factors(values, verbose=False)):
+                with pytest.raises(ValueError, match='not numbers'):
+                    call()
+    for odd in (pd.Series([True, False]), pd.Series(pd.Categorical([10957, 10958])),
+                pd.Series([pd.Timestamp('2000-01-01'), 10957], dtype=object), pd.Series([1.5, np.nan])):
+        with pytest.raises(ValueError, match='not numbers'):
+            _as_datetime_series(odd)
+
+
+def test_dates_with_missing_values_or_mixed_offsets_are_rejected():
+    from improved_glm import _as_datetime_series
+    with pytest.raises(ValueError, match='missing'):
+        _as_datetime_series(pd.Series(pd.to_datetime(['2000-01-01', None])))
+    with pytest.raises(ValueError):
+        _as_datetime_series(pd.Series(['2020-01-01T00:00:00+01:00', '2020-07-01T00:00:00+02:00']))
 
 
 # --------------------------------------------------------------------------------------------------------------
@@ -267,16 +285,14 @@ def test_fit_dlnm_model_numeric_dates_rejected_or_equal_to_R(kind):
     raise_or_match(lambda: fit_improved(v), lambda g, w: assert_fit_is_R(g, w), kind)
 
 
-@pytest.mark.parametrize('container', [pytest.param(c, marks=NUMERIC_MARKS) for c in
-                                       ('Series', 'list', 'object Series', 'nullable Int64 Series')])
+@pytest.mark.parametrize('container', ['Series', 'list', 'object Series', 'nullable Int64 Series'])
 def test_fit_dlnm_model_R_day_numbers_in_any_container(container):
     """R Date day numbers (as.numeric(date), the way chicagoNMMAPS$date arrives through rpy2) in every container."""
     v = CONTAINERS[container](encodings()['R day numbers int64'])
     raise_or_match(lambda: fit_improved(v), lambda g, w: assert_fit_is_R(g, w), f'R day numbers in {container}')
 
 
-@pytest.mark.parametrize('kind', [pytest.param(k, marks=NUMERIC_MARKS)
-                                  for k in ('R day numbers int64', 'Python ordinals', 'yyyymmdd integers')])
+@pytest.mark.parametrize('kind', ['R day numbers int64', 'Python ordinals', 'yyyymmdd integers'])
 def test_create_seasonality_basis_numeric_dates_rejected_or_equal_to_R(kind):
     """ns(date, df = dfseas * length(unique(year))): with day numbers the year count must still be 3."""
     from improved_glm import ImprovedGLMInterface
@@ -290,8 +306,7 @@ def test_create_seasonality_basis_numeric_dates_rejected_or_equal_to_R(kind):
     raise_or_match(make, lambda b, w: assert_close(b, s.ref_seasonal, rtol=1e-10, what=w), f'seasonal basis, {kind}')
 
 
-@pytest.mark.parametrize('kind', [pytest.param(k, marks=NUMERIC_MARKS)
-                                  for k in ('R day numbers int64', 'Python ordinals', 'yyyymmdd integers')])
+@pytest.mark.parametrize('kind', ['R day numbers int64', 'Python ordinals', 'yyyymmdd integers'])
 def test_create_dow_factors_numeric_dates_rejected_or_equal_to_R(kind):
     """model.matrix(~factor(weekday))[, -1]: with day numbers the dummies must not collapse to zero columns."""
     from improved_glm import ImprovedGLMInterface
@@ -305,7 +320,6 @@ def test_create_dow_factors_numeric_dates_rejected_or_equal_to_R(kind):
     raise_or_match(make, lambda d, w: assert_close(d, s.ref_dow, rtol=0, what=w), f'weekday dummies, {kind}')
 
 
-@known_defect(GAP, KEY, note='_as_datetime_series(np.arange(10957, 10967)) == 1970-01-01 00:00:00.000010957')
 def test_as_datetime_series_R_day_numbers_2000_01_01():
     """The helper itself: 10957 is R's as.Date(10957) == 2000-01-01.  Reading it as 10957 ns is never right."""
     from improved_glm import _as_datetime_series
@@ -351,15 +365,13 @@ def test_baseline_fit_enhanced_and_add_region_with_datetime_dates_match_R():
     _check_enhanced(_region(s.truth), 'add_region_analysis')
 
 
-@pytest.mark.parametrize('kind', [pytest.param(k, marks=NUMERIC_MARKS)
-                                  for k in ('R day numbers int64', 'Python ordinals', 'yyyymmdd integers')])
+@pytest.mark.parametrize('kind', ['R day numbers int64', 'Python ordinals', 'yyyymmdd integers'])
 def test_fit_enhanced_dlnm_model_numeric_dates_rejected_or_equal_to_R(kind):
     v = encodings()[kind]
     raise_or_match(lambda: _enhanced(v), _check_enhanced, f'fit_enhanced_dlnm_model, {kind}')
 
 
-@pytest.mark.parametrize('kind', [pytest.param(k, marks=NUMERIC_MARKS)
-                                  for k in ('R day numbers int64', 'R day numbers float64', 'yyyymmdd integers')])
+@pytest.mark.parametrize('kind', ['R day numbers int64', 'R day numbers float64', 'yyyymmdd integers'])
 def test_add_region_analysis_numeric_dates_rejected_or_equal_to_R(kind):
     v = encodings()[kind]
     raise_or_match(lambda: _region(v), _check_enhanced, f'add_region_analysis, {kind}')
@@ -409,8 +421,6 @@ def test_real_date_containers_give_R_basis_and_dummies(label):
 # --------------------------------------------------------------------------------------------------------------
 NO_DST = ['UTC', 'Asia/Kolkata']
 DST = ['America/Chicago', 'Europe/Paris', 'Australia/Sydney']
-DEFECT_DST = known_defect(GAP, KEY, note='tz-aware dates: (dates - min) / Timedelta(days=1) is fractional across a DST change')
-DST_MARKS = _as_param_marks(DEFECT_DST)
 
 
 def _tz_dates(tz, as_index=False):
@@ -432,7 +442,7 @@ def test_R_reduces_local_midnight_timestamps_to_the_same_integer_Dates(tz):
     assert_close(rget(f'unclass(ns(nd_back, df = {DFSEAS} * 3))'), sc().ref_seasonal, rtol=1e-12, what=f'{tz}: R basis')
 
 
-@pytest.mark.parametrize('tz', list(NO_DST) + [pytest.param(z, marks=DST_MARKS) for z in DST])
+@pytest.mark.parametrize('tz', list(NO_DST) + DST)
 def test_tz_aware_dates_give_the_R_seasonal_basis_and_dummies(tz):
     """Same calendar days, tz-aware: the seasonal basis must be R's ns(Date); the weekday dummies are local."""
     from improved_glm import ImprovedGLMInterface
@@ -446,21 +456,19 @@ def test_tz_aware_dates_give_the_R_seasonal_basis_and_dummies(tz):
                                                              f'{max_rel_diff(seasonal, s.ref_seasonal):.2e})')
 
 
-@pytest.mark.parametrize('tz', ['Asia/Kolkata', pytest.param('America/Chicago', marks=DST_MARKS),
-                                pytest.param('Australia/Sydney', marks=DST_MARKS)])
+@pytest.mark.parametrize('tz', ['Asia/Kolkata', 'America/Chicago', 'Australia/Sydney'])
 def test_tz_aware_dates_give_the_R_fit(tz):
     """Cross-basis coefficients of the full model: tz-aware local dates must equal R's fit on the integer Dates."""
     g = fit_improved(_tz_dates(tz))
     assert_fit_is_R(g, f'tz-aware Series ({tz})')
 
 
-@pytest.mark.parametrize('tz', [pytest.param('America/Chicago', marks=DST_MARKS)])
+@pytest.mark.parametrize('tz', ['America/Chicago'])
 def test_tz_aware_datetimeindex_gives_the_R_fit(tz):
     g = fit_improved(_tz_dates(tz, as_index=True))
     assert_fit_is_R(g, f'tz-aware DatetimeIndex ({tz})')
 
 
-@DEFECT_DST
 def test_tz_aware_result_does_not_depend_on_the_timezone_label():
     """Invariance statement of the defect: two tz labels for the same calendar days cannot give different seasonal
     bases (UTC has no DST, Chicago does) -- holds only when tz-aware dates are reduced to calendar days."""
@@ -470,3 +478,16 @@ def test_tz_aware_result_does_not_depend_on_the_timezone_label():
         a = iface.create_seasonality_basis(_tz_dates('UTC'), DFSEAS)
         b = iface.create_seasonality_basis(_tz_dates('America/Chicago'), DFSEAS)
     assert max_rel_diff(b, a) <= 1e-10, f'same calendar days, UTC vs America/Chicago: {max_rel_diff(b, a):.2e}'
+
+
+def test_tz_aware_dates_keep_their_local_calendar_day_and_time_of_day():
+    """tz-aware dates become the local wall clock (R: as.Date(x, tz = tz)): a late-evening local time stays on its
+    own calendar day (UTC would already be the next day in America/Chicago) and the result is tz-naive."""
+    from improved_glm import _as_datetime_series
+    local = pd.Series(pd.to_datetime(['2000-03-11 22:30', '2000-03-12 22:30', '2000-03-13 22:30'])).dt.tz_localize(
+        'America/Chicago')                                     # tz-aware, UTC offset -6 h
+    got = _as_datetime_series(local)
+    assert got.dt.tz is None
+    assert got.tolist() == [pd.Timestamp('2000-03-11 22:30'), pd.Timestamp('2000-03-12 22:30'),
+                            pd.Timestamp('2000-03-13 22:30')]
+    assert got.dt.day_name().tolist() == ['Saturday', 'Sunday', 'Monday']

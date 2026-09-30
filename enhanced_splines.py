@@ -9,6 +9,8 @@ import numpy as np
 from typing import Optional, Union, List, Tuple, Dict, Any
 import warnings
 
+from rbridge import r_session
+
 # R splines implementation via rpy2 - REQUIRED
 try:
     import rpy2.robjects as robjects
@@ -17,7 +19,8 @@ try:
     from rpy2.robjects.conversion import localconverter
     
     # Load R's splines package
-    splines = importr('splines')
+    with r_session():
+        splines = importr('splines')
     HAS_RPY2 = True
 except ImportError:
     HAS_RPY2 = False
