@@ -318,8 +318,6 @@ def _with_extra_terms(case, n_extra=3, nan_at=None):
     return coef, vcov
 
 
-@known_defect('H2', 'crosspred-core-13', 'crosspred-grid-10',
-              note='model= route: an aliased (NaN) cross-basis coefficient is accepted (R stops)')
 def test_crosspred_model_route_nan_stops_like_r(case):
     """R: an NA coefficient inside the cross-basis block of a fitted model (aliased term) -> crosspred stops."""
     coef, vcov = _with_extra_terms(case, nan_at=2)

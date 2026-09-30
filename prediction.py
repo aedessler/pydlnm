@@ -214,6 +214,9 @@ class CrossPred:
             self.vcov = model_info['vcov']
             self.model_link = model_info['link'] or model_link
             self.model_class = model_info['class']
+            if np.isnan(self.coefficients).any() or np.isnan(self.vcov).any():
+                raise ValueError("coef/vcov not consistent with basis matrix. See help(crosspred) "
+                                 "(missing values, e.g. aliased coefficients of the model)")
         else:
             self.coefficients = np.asarray(coef, dtype=float).ravel()
             self.vcov = np.atleast_2d(np.asarray(vcov, dtype=float))
