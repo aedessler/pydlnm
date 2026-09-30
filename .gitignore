@@ -17,6 +17,10 @@
 !validation/
 !validation/**
 
+# Differential tests (R dlnm vs PyDLNM)
+!tests/
+!tests/**
+
 # dlnm-master folder (R reference package)
 dlnm-master/
 data.csv
