@@ -4,30 +4,31 @@ R-vs-PyDLNM differential tests for the non-spline one-dimensional bases (dlnm st
 cr()) and the default-argument behaviour of ns()/bs() reached through OneBasis and CrossBasis. The reference is always
 computed by R at test time (onebasis() / crossbasis() of dlnm 2.4.10), never copied from Python output.
 
-Known defects (strict xfail, @known_defect('S1', ...); each test asserts the R-faithful behaviour)
+Findings covered (all fixed: every test is an ordinary test that asserts the R-faithful behaviour)
 
   basis-discrete-4   StrataBasis: df counts columns (df-intercept quantile breaks), df=1+intercept is one all-ones
                      column, ref=0 semantics, invalid ref is an error
   crossbasis-18      same StrataBasis defect seen through argvar/arglag 'strata' (plus R's old 'knots' -> 'breaks'
                      alias, NaN rows, CrossBasis routing of a strata var/lag basis)
-  basis-discrete-5   StrataBasis: NaN exposures get a real stratum instead of NA rows
+  basis-discrete-5   StrataBasis: NaN exposures are NA rows, not a real stratum
   basis-discrete-15  StrataBasis breaks: sorted/uniquified, scalar breaks, df attribute, df=0
   basis-discrete-6   ThresholdBasis: sorted thr.value, default side 'd' for several thresholds, h/l use the minimum,
                      d uses min and max, resolved thr.value/side attributes and their round trip
-  basis-discrete-9   ns/bs default df=NULL (1 / degree columns), CrossBasis(argvar={'fun':'bs'}) crash
-  basis-discrete-14  OneBasis has no 'ps', 'cr' (and 'integer') function
+  basis-discrete-9   ns/bs default df=NULL (1 / degree columns), CrossBasis(argvar={'fun':'bs'})
+  basis-discrete-14  OneBasis functions 'ps', 'cr' (and 'integer')
   crossbasis-20      argvar fun='integer' (OneBasis and CrossBasis)
   basis-discrete-16, crossbasis-19
-                     PolynomialBasis crashes on NaN input (R: NaN rows, scale ignores NaN)
+                     PolynomialBasis with NaN input (R: NaN rows, scale ignores NaN)
 
-Plain (unmarked) tests guard the behaviour that is already faithful and must stay so while the fixes land: strata with
-explicit breaks / intercept, single thresholds, poly without NaN, ns/bs with explicit df or knots, integer lag basis,
-error behaviour for unknown functions.
+Also guarded: strata with explicit breaks / intercept, single thresholds, poly without NaN, ns/bs with explicit df or
+knots, integer lag basis, error behaviour for unknown functions.
 """
+import warnings
+
 import numpy as np
 import pytest
 
-from rhelpers import assert_close, chicago, known_defect, max_rel_diff, np2r, r, rget
+from rhelpers import assert_close, chicago, max_rel_diff, np2r, r, rget
 
 import rpy2.rinterface_lib.embedded as _emb
 
@@ -378,7 +379,6 @@ def test_thr_invalid_side_raises_in_both():
 _THR_SETS = [[10.0, 20.0], [20.0, 10.0], [5.0, 12.0, 25.0], [25.0, 5.0, 12.0]]
 
 
-@known_defect(THEME, 'basis-discrete-6', note="side defaults to 'd' when thr.value has several elements")
 @pytest.mark.parametrize('thr', _THR_SETS, ids=str)
 @pytest.mark.parametrize('intercept', [False, True])
 def test_thr_default_side_is_double_for_several_thresholds(thr, intercept):
@@ -388,7 +388,6 @@ def test_thr_default_side_is_double_for_several_thresholds(thr, intercept):
     assert py_onebasis(x, 'thr', thr_value=np.array(thr), intercept=intercept).shape[1] == 2 + intercept
 
 
-@known_defect(THEME, 'basis-discrete-6', note='side h/l with a vector: one column at min(thr.value), not one per value')
 @pytest.mark.parametrize('side', ['h', 'l'])
 @pytest.mark.parametrize('thr', _THR_SETS, ids=str)
 def test_thr_hl_side_uses_only_the_minimum_threshold(thr, side):
@@ -398,7 +397,6 @@ def test_thr_hl_side_uses_only_the_minimum_threshold(thr, side):
     assert py_onebasis(x, 'thr', thr_value=np.array(thr), side=side).shape[1] == 1
 
 
-@known_defect(THEME, 'basis-discrete-6', note="side 'd' with >2 or unsorted thresholds: R uses min and max")
 @pytest.mark.parametrize('thr', [[20.0, 10.0], [5.0, 12.0, 25.0], [25.0, 5.0, 12.0], [12.0, 25.0, 5.0, 18.0]], ids=str)
 @pytest.mark.parametrize('intercept', [False, True])
 def test_thr_double_side_uses_min_and_max_threshold(thr, intercept):
@@ -406,7 +404,6 @@ def test_thr_double_side_uses_min_and_max_threshold(thr, intercept):
     assert_onebasis_matches_r(_x_thr(), 'thr', thr_value=np.array(thr), side='d', intercept=intercept)
 
 
-@known_defect(THEME, 'basis-discrete-6', note="thr.value/side attributes hold R's resolved values")
 @pytest.mark.parametrize('kw', [dict(thr_value=np.array([20.0, 10.0])),
                                 dict(thr_value=np.array([5.0, 12.0, 25.0]), side='d'),
                                 dict(thr_value=np.array([25.0, 5.0, 12.0]), side='h'),
@@ -422,7 +419,6 @@ def test_thr_resolved_attributes_match_r(kw):
                  what='thr.value attribute')
 
 
-@known_defect(THEME, 'basis-discrete-6', note='rebuilding from the stored attributes at new x must reproduce R')
 @pytest.mark.parametrize('kw', [dict(thr_value=np.array([20.0, 10.0])),
                                 dict(thr_value=np.array([25.0, 5.0, 12.0]), side='d'),
                                 dict(thr_value=np.array([25.0, 5.0, 12.0]), side='h', intercept=True)], ids=_ids)
@@ -439,8 +435,6 @@ def test_thr_attributes_round_trip_to_new_x(kw):
     assert_close(py, ref, rtol=1e-8, what='rebuilt threshold basis')
 
 
-@known_defect(THEME, 'basis-discrete-6', 'basis-discrete-8',
-              note="needs the multi-threshold default side and R's 'thr.value' spelling (addon patch)")
 def test_thr_dotted_thr_value_argument_is_honoured():
     """R-named argument round trip: OneBasis(x, 'thr', **{'thr.value': v}) is R's onebasis(x, 'thr', thr.value=v),
     which for two thresholds means side 'd' (R's default); today the argument is swallowed by **kwargs."""
@@ -474,8 +468,6 @@ def test_poly_without_nan_matches_r(degree, intercept, scale):
     assert_onebasis_matches_r(x, 'poly', rtol=1e-12, **kw)
 
 
-@known_defect(THEME, 'basis-discrete-16', 'crossbasis-19',
-              note='sklearn PolynomialFeatures rejects NaN; np.max(abs(x)) is NaN')
 @pytest.mark.parametrize('degree', [1, 2, 3])
 @pytest.mark.parametrize('intercept', [False, True])
 @pytest.mark.parametrize('xname', ['small', 'random'])
@@ -485,7 +477,6 @@ def test_poly_nan_gives_nan_rows_like_r(degree, intercept, xname):
     assert_onebasis_matches_r(x, 'poly', rtol=1e-12, degree=degree, intercept=intercept)
 
 
-@known_defect(THEME, 'basis-discrete-16', 'crossbasis-19', note='scale attribute ignores NaN in R')
 def test_poly_scale_attribute_ignores_nan():
     x = _x_poly_nan_random()
     r_onebasis(x, 'poly', degree=2)
@@ -493,7 +484,6 @@ def test_poly_scale_attribute_ignores_nan():
     assert_close(np.atleast_1d(ob.attributes['scale']).astype(float), r_attr('scale'), rtol=1e-14, what='scale')
 
 
-@known_defect(THEME, 'basis-discrete-16', 'crossbasis-19', note='explicit scale with NaN input')
 def test_poly_nan_with_user_scale():
     assert_onebasis_matches_r(_x_poly_nan_random(), 'poly', rtol=1e-12, degree=3, scale=20.0)
 
@@ -504,7 +494,6 @@ def _cb_poly_x():
     return x
 
 
-@known_defect(THEME, 'crossbasis-19', 'basis-discrete-16', note='CrossBasis(argvar poly) with NaN exposure raises')
 def test_crossbasis_poly_with_nan_exposure_has_r_nan_pattern():
     """R: crossbasis() passes NaN exposures through (rows that see a NaN in the lag window are NaN). Only the
     NaN pattern is compared here; the values need the CrossBasis dispatch fix (next test)."""
@@ -516,8 +505,6 @@ def test_crossbasis_poly_with_nan_exposure_has_r_nan_pattern():
     assert np.array_equal(np.isnan(py), np.isnan(ref))
 
 
-@known_defect(THEME, 'crossbasis-19', 'basis-discrete-16', 'basis-discrete-1',
-              note='needs the NaN fix and the CrossBasis dispatch fix (argvar fun is replaced by bs today)')
 def test_crossbasis_poly_with_nan_exposure_matches_r():
     assert_crossbasis_matches_r(_cb_poly_x(), 3, dict(fun='poly', degree=2), dict(fun='ns', df=3))
 
@@ -540,8 +527,6 @@ def test_spline_with_explicit_knots_matches_r():
     assert_onebasis_matches_r(x, 'bs', rtol=1e-10, knots=kv, degree=2)
 
 
-@known_defect(THEME, 'basis-discrete-9', 'basis-discrete-1', 'crossbasis-4',
-              note='SplineBasis/BSplineBasis default df=4; R default df=NULL')
 @pytest.mark.parametrize('spec', [dict(fun='ns'), dict(fun='bs'), dict(fun='bs', degree=2),
                                   dict(fun='ns', intercept=True)], ids=_ids)
 def test_spline_default_df_is_null_like_r(spec):
@@ -551,8 +536,6 @@ def test_spline_default_df_is_null_like_r(spec):
     assert_onebasis_matches_r(_temp(400), fun, rtol=1e-10, **spec)
 
 
-@known_defect(THEME, 'basis-discrete-9', 'basis-discrete-1', 'crossbasis-4',
-              note='OneBasis(x) with no fun: ns with df=NULL (one column)')
 def test_onebasis_default_function_is_ns_with_one_column():
     x = _temp(300)
     np2r('.x', x)
@@ -571,8 +554,6 @@ _CB_DEFAULT_DF = [
 ]
 
 
-@known_defect(THEME, 'basis-discrete-9', 'basis-discrete-1', 'crossbasis-4',
-              note='IndexError / wrong column count: time-series path has its own df defaults')
 @pytest.mark.parametrize('argvar,arglag,lag', _CB_DEFAULT_DF, ids=lambda v: str(v))
 def test_crossbasis_var_basis_without_df_matches_r(argvar, arglag, lag):
     """crossbasis(temp, lag, argvar=list(fun='bs')) with an explicit lag basis (the default-arglag issue is separate)."""
@@ -670,7 +651,6 @@ def _attr_matrix(ob, name):
     return None if v is None else np.asarray(v, dtype=float)
 
 
-@known_defect(THEME, 'basis-discrete-14', note="OneBasis has no 'ps' (P-spline) function")
 @pytest.mark.parametrize('kw', [dict(), dict(df=6), dict(df=8, degree=2), dict(df=6, intercept=True), dict(df=6, diff=1),
                                 dict(df=6, fx=True)], ids=_ids)
 def test_onebasis_ps_matches_r(kw):
@@ -685,7 +665,6 @@ def test_onebasis_ps_matches_r(kw):
     assert_close(_attr_matrix(ob, 'knots'), r_attr('knots'), rtol=1e-10, what='knots attribute')
 
 
-@known_defect(THEME, 'basis-discrete-14', note="OneBasis has no 'cr' (cubic regression spline) function")
 @pytest.mark.parametrize('kw', [dict(), dict(df=6), dict(df=6, intercept=True), dict(df=5, fx=True)], ids=_ids)
 def test_onebasis_cr_matches_r(kw):
     """R cr(): mgcv smooth.construct.cr.smooth.spec at quantile knots, penalty S in the attributes."""
@@ -699,7 +678,6 @@ def test_onebasis_cr_matches_r(kw):
         assert_close(np.ravel(_attr_matrix(ob, 'S')), r_attr('S'), rtol=1e-8, what='penalty matrix S')
 
 
-@known_defect(THEME, 'basis-discrete-14', note="OneBasis has no 'ps'/'cr': missing values, knot range, few distinct x")
 @pytest.mark.parametrize('fun,kw,nan', [('ps', dict(df=6), True), ('ps', dict(df=6, knots=np.array([-10.0, 40.0])), False),
                                         ('cr', dict(df=6), True), ('cr', dict(df=6, intercept=True), True)], ids=str)
 def test_onebasis_ps_cr_missing_values_and_knots_match_r(fun, kw, nan):
@@ -712,28 +690,108 @@ def test_onebasis_ps_cr_missing_values_and_knots_match_r(fun, kw, nan):
     assert_onebasis_matches_r(x, fun, rtol=1e-8, **kw)
 
 
-@known_defect(THEME, 'basis-discrete-14', note="OneBasis has no 'cr': fewer distinct x than knots (rows added for mgcv)")
 def test_onebasis_cr_with_few_distinct_values_matches_r():
     _need_r_package('mgcv')
     x = np.random.default_rng(8).integers(0, 5, 120).astype(float)              # 5 distinct values < 7 knots
     assert_onebasis_matches_r(x, 'cr', rtol=1e-8, df=6)
 
 
-@known_defect(THEME, 'basis-discrete-14', 'crossbasis-20', 'basis-discrete-10',
-              note="OneBasis has no 'integer' function")
 @pytest.mark.parametrize('kw', [dict(), dict(intercept=True), dict(values=np.arange(0.0, 8.0))], ids=_ids)
 def test_onebasis_integer_matches_r(kw):
     """R integer(): one indicator column per level (sorted distinct values or `values`), first dropped unless intercept."""
     assert_onebasis_matches_r(_x_categorical(), 'integer', **kw)
 
 
-@known_defect(THEME, 'basis-discrete-14', 'crossbasis-20', 'basis-discrete-10',
-              note="integer basis: NaN rows and single level")
 def test_onebasis_integer_missing_values_and_single_level():
     x = _x_categorical(60, seed=5, nlev=4)
     x[[3, 30]] = np.nan
     assert_onebasis_matches_r(x, 'integer')
     assert_onebasis_matches_r(np.full(20, 3.0), 'integer')                # one level: column kept, intercept forced
+
+
+@pytest.mark.parametrize('fun,kw,cen', [
+    ('ps', dict(df=6), 15.0), ('ps', dict(df=8, degree=2), 15.0), ('ps', dict(df=6, intercept=True), None),
+    ('cr', dict(df=5), 15.0), ('cr', dict(df=5, fx=True), 15.0),
+    ('thr', dict(thr_value=np.array([10.0, 20.0])), 15.0), ('thr', dict(thr_value=np.array([25.0, 5.0, 12.0])), 15.0),
+    ('poly', dict(degree=2), 15.0)], ids=str)
+def test_crosspred_on_ps_cr_thr_onebasis_matches_r(fun, kw, cen):
+    """crosspred() rebuilds ps / cr (knots, df, S recorded), thr (sorted, reduced thr.value and side) and poly (scale)
+    from the resolved arguments: fit and s.e. equal R's for identical coef / vcov."""
+    from prediction import crosspred
+    if fun == 'cr':
+        _need_r_package('mgcv')
+    x = _temp(500)
+    at = np.round(np.linspace(np.quantile(x, .05), np.quantile(x, .95), 11), 3)
+    ob = py_onebasis(x, fun, **kw)
+    ncol = ob.shape[1]
+    rng = np.random.default_rng(7)
+    coef = rng.normal(0.0, 0.1, ncol)
+    A = rng.normal(0.0, 0.05, (ncol, ncol))
+    vcov = A @ A.T + 1e-3 * np.eye(ncol)
+    np2r('.coef', coef)
+    np2r('.vcov', vcov)
+    np2r('.at', at)
+    r_onebasis(x, fun, **kw)
+    cen_r = 'FALSE' if cen is None else repr(cen)
+    r(f'.cp <- suppressWarnings(crosspred(.b, coef=.coef, vcov=.vcov, at=.at, cen={cen_r}))')
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        cp = crosspred(ob, coef=coef, vcov=vcov, at=at, cen=False if cen is None else cen)
+    assert_close(np.ravel(cp.allfit), rget('as.numeric(.cp$allfit)'), rtol=1e-10, what='allfit')
+    assert_close(np.ravel(cp.allse), rget('as.numeric(.cp$allse)'), rtol=1e-10, what='allse')
+
+
+def test_thr_default_threshold_with_missing_values_is_na_like_r():
+    """R: thr.value defaults to median(x, na.rm=FALSE): with a missing exposure it is NA and so is every row."""
+    x = _x_thr()
+    x[[4, 70]] = np.nan
+    assert_onebasis_matches_r(x, 'thr')
+    ob = py_onebasis(x, 'thr')
+    assert np.isnan(ob.basis).all() and np.isnan(ob.attributes['thr.value']).all()
+
+
+@pytest.mark.parametrize('argvar,arglag,lag', [
+    (dict(fun='ps', df=6), dict(fun='ns', df=3), 5),
+    (dict(fun='cr', df=5), dict(fun='ns', df=3), 5),
+    (dict(fun='ns', df=4), dict(fun='ps', df=5, degree=2), 10),
+    (dict(fun='ns', df=4), dict(fun='cr', df=4), 10),
+    (dict(fun='ns', df=4), dict(fun='integer', intercept=False), 5),
+    (dict(fun='ns', df=4), dict(fun='integer', values=np.arange(0.0, 8.0)), 5)], ids=lambda v: str(v))
+def test_crossbasis_ps_cr_integer_var_or_lag_basis_matches_r(argvar, arglag, lag):
+    if 'cr' in (argvar['fun'], arglag['fun']):
+        _need_r_package('mgcv')
+    assert_crossbasis_matches_r(_temp(600), lag, argvar, arglag, rtol=1e-8)
+
+
+@pytest.mark.parametrize('argvar,arglag', [
+    (dict(fun='cr', df=5), dict(fun='ns', df=3)),
+    (dict(fun='ps', df=6), dict(fun='ps', df=4, degree=2))], ids=lambda v: str(v))
+def test_crosspred_of_crossbasis_with_ps_cr_matches_r(argvar, arglag):
+    """The resolved argvar / arglag of a ps / cr cross-basis (knots, S, df ...) are what crosspred rebuilds from,
+    also on a lag sub-period."""
+    from prediction import crosspred
+    _need_r_package('mgcv')
+    x = _temp(800)
+    at = np.round(np.linspace(np.quantile(x, .05), np.quantile(x, .95), 9), 3)
+    np2r('.x', x)
+    np2r('.at', at)
+    r(f'.cb <- crossbasis(.x, lag=8, argvar={_rlist("cbv_", argvar)}, arglag={_rlist("cbl_", arglag)})')
+    cb = py_crossbasis(x, 8, argvar, arglag)
+    k = cb.basis.shape[1]
+    rng = np.random.default_rng(9)
+    coef = rng.normal(0.0, 0.05, k)
+    A = rng.normal(size=(k, k))
+    vcov = 1e-4 * (A @ A.T / k + np.eye(k))
+    np2r('.coef', coef)
+    np2r('.vcov', vcov)
+    for lag in (None, (2, 6)):
+        lag_r = '' if lag is None else f', lag=c({lag[0]}, {lag[1]})'
+        r(f'.cp <- suppressWarnings(crosspred(.cb, coef=.coef, vcov=.vcov, model.link="log", at=.at, cen=15{lag_r}))')
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            cp = crosspred(cb, coef=coef, vcov=vcov, model_link='log', at=at, cen=15.0, lag=lag)
+        for field in ('matfit', 'allfit', 'allse'):
+            assert_close(np.asarray(getattr(cp, field)), rget(f'.cp${field}'), rtol=1e-8, what=f'{field} lag={lag}')
 
 
 @pytest.mark.parametrize('fun', ['hthr', 'lthr', 'dthr', 'foo'])
@@ -763,7 +821,6 @@ def test_crossbasis_strata_df_var_basis_matches_r():
     assert_crossbasis_matches_r(_temp(400), 6, dict(fun='strata', df=3), dict(fun='ns', df=3))
 
 
-@known_defect(THEME, 'crossbasis-20', note="argvar fun='integer' is unknown to OneBasis / the time-series path")
 @pytest.mark.parametrize('argvar,arglag,lag', [
     (dict(fun='integer'), dict(fun='integer'), 3),
     (dict(fun='integer'), dict(fun='ns', df=3), 3),

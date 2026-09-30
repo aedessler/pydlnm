@@ -22,6 +22,8 @@ try:
 except ImportError:
     HAS_RPY2 = False
 
+from basis_functions import _r_spline_basis
+
 
 def _check_rpy2():
     """Check if rpy2 is available"""
@@ -30,6 +32,19 @@ def _check_rpy2():
             "rpy2 is required for spline functionality in PyDLNM. "
             "Please install rpy2 with: pip install rpy2"
         )
+
+
+def _spline_attributes(fun: str, basis_matrix: np.ndarray, knots: np.ndarray, boundary: np.ndarray,
+                       degree: Optional[int], intercept: bool) -> Dict:
+    """Attributes of a spline basis: R's own (the interior knots it used, also when it derived them from ``df``,
+    and the boundary knots), the degree and intercept, and the number of columns."""
+    attributes = {'fun': fun, 'intercept': intercept, 'n_basis': basis_matrix.shape[1],
+                  'knots': np.asarray(knots, dtype=float)}
+    if degree is not None:
+        attributes['degree'] = degree
+    if len(boundary) == 2:
+        attributes['boundary_knots'] = (boundary[0], boundary[1])
+    return attributes
 
 
 def bs_enhanced(x: np.ndarray, 
@@ -46,76 +61,28 @@ def bs_enhanced(x: np.ndarray,
     x : array-like
         Predictor variable values
     df : int, optional
-        Degrees of freedom. If None, derived from knots
-    knots : array-like, optional
-        Internal knot locations. If None, placed at quantiles
+        Degrees of freedom. As in R there is no default: with neither ``df`` nor ``knots`` the basis has no
+        interior knots (``degree`` columns without intercept).
+    knots : array-like or scalar, optional
+        Internal knot locations. If None and ``df`` is given, placed at quantiles of x
     degree : int, default 3
         Degree of the piecewise polynomial (3 for cubic)
     intercept : bool, default False
         Whether to include intercept column
     boundary_knots : tuple, optional
-        Boundary knots (min, max). If None, uses range of x
+        Boundary knots (min, max). If None, R's default (the range of x)
         
     Returns:
     --------
     tuple
         - basis: B-spline basis matrix
-        - attributes: Dictionary with basis information
+        - attributes: Dictionary with basis information, including the interior ``knots`` and the
+          ``boundary_knots`` R used
     """
     _check_rpy2()
     
-    x = np.asarray(x, dtype=float)
-    
-    # Use R's B-splines for exact compatibility
-    with localconverter(robjects.default_converter + numpy2ri.converter):
-        # Convert boundary knots if provided
-        r_boundary_knots = None
-        if boundary_knots is not None:
-            r_boundary_knots = robjects.FloatVector(boundary_knots)
-        
-        if knots is not None:
-            knots_array = np.asarray(knots, dtype=float)
-            if r_boundary_knots is not None:
-                r_result = splines.bs(x, knots=knots_array, degree=degree, 
-                                    intercept=intercept, Boundary_knots=r_boundary_knots)
-            else:
-                r_result = splines.bs(x, knots=knots_array, degree=degree, intercept=intercept)
-        elif df is not None:
-            if r_boundary_knots is not None:
-                r_result = splines.bs(x, df=df, degree=degree, 
-                                    intercept=intercept, Boundary_knots=r_boundary_knots)
-            else:
-                r_result = splines.bs(x, df=df, degree=degree, intercept=intercept)
-        else:
-            if r_boundary_knots is not None:
-                r_result = splines.bs(x, df=4, degree=degree, 
-                                    intercept=intercept, Boundary_knots=r_boundary_knots)
-            else:
-                r_result = splines.bs(x, df=4, degree=degree, intercept=intercept)
-        
-        # Convert to numpy
-        basis_matrix = np.array(r_result)
-        
-        # Extract attributes from R result
-        attributes = {
-            'fun': 'bs',
-            'degree': degree,
-            'intercept': intercept,
-            'n_basis': basis_matrix.shape[1]
-        }
-        
-        # Store R attributes if available
-        if hasattr(r_result, 'attributes'):
-            r_attrs = dict(r_result.attributes.items())
-            if 'knots' in r_attrs:
-                attributes['knots'] = np.array(r_attrs['knots'])
-            if 'Boundary.knots' in r_attrs:
-                boundary_vals = np.array(r_attrs['Boundary.knots'])
-                attributes['boundary_knots'] = (boundary_vals[0], boundary_vals[1])
-            if 'df' in r_attrs:
-                attributes['df'] = int(r_attrs['df'])
-    
-    return basis_matrix, attributes
+    basis_matrix, knots_used, boundary_used = _r_spline_basis('bs', x, df, knots, degree, intercept, boundary_knots)
+    return basis_matrix, _spline_attributes('bs', basis_matrix, knots_used, boundary_used, degree, intercept)
 
 
 def ns_enhanced(x: np.ndarray,
@@ -134,90 +101,45 @@ def ns_enhanced(x: np.ndarray,
     x : array-like
         Predictor variable values
     df : int, optional
-        Degrees of freedom. If None, derived from knots
-    knots : array-like, optional
-        Internal knot locations
+        Degrees of freedom. As in R there is no default: with neither ``df`` nor ``knots`` the basis has no
+        interior knots (a single column without intercept).
+    knots : array-like or scalar, optional
+        Internal knot locations. If None and ``df`` is given, placed at quantiles of x
     intercept : bool, default False
         Whether to include intercept column
     boundary_knots : tuple, optional
-        Boundary knots (min, max)
+        Boundary knots (min, max). If None, R's default (the range of x)
         
     Returns:
     --------
     tuple
         - basis: Natural spline basis matrix
-        - attributes: Dictionary with basis information
+        - attributes: Dictionary with basis information, including the interior ``knots`` and the
+          ``boundary_knots`` R used
     """
     _check_rpy2()
     
-    x = np.asarray(x, dtype=float)
-    
-    # Use R's natural splines for exact compatibility
-    with localconverter(robjects.default_converter + numpy2ri.converter):
-        # Convert boundary knots if provided
-        r_boundary_knots = None
-        if boundary_knots is not None:
-            r_boundary_knots = robjects.FloatVector(boundary_knots)
-        
-        if knots is not None:
-            knots_array = np.asarray(knots, dtype=float)
-            if r_boundary_knots is not None:
-                r_result = splines.ns(x, knots=knots_array, intercept=intercept, 
-                                    Boundary_knots=r_boundary_knots)
-            else:
-                r_result = splines.ns(x, knots=knots_array, intercept=intercept)
-        elif df is not None:
-            if r_boundary_knots is not None:
-                r_result = splines.ns(x, df=df, intercept=intercept, 
-                                    Boundary_knots=r_boundary_knots)
-            else:
-                r_result = splines.ns(x, df=df, intercept=intercept)
-        else:
-            if r_boundary_knots is not None:
-                r_result = splines.ns(x, df=4, intercept=intercept, 
-                                    Boundary_knots=r_boundary_knots)
-            else:
-                r_result = splines.ns(x, df=4, intercept=intercept)
-        
-        # Convert to numpy
-        basis_matrix = np.array(r_result)
-        
-        # Extract attributes from R result
-        attributes = {
-            'fun': 'ns',
-            'intercept': intercept,
-            'n_basis': basis_matrix.shape[1]
-        }
-        
-        # Store R attributes if available
-        if hasattr(r_result, 'attributes'):
-            r_attrs = dict(r_result.attributes.items())
-            if 'knots' in r_attrs:
-                attributes['knots'] = np.array(r_attrs['knots'])
-            if 'Boundary.knots' in r_attrs:
-                boundary_vals = np.array(r_attrs['Boundary.knots'])
-                attributes['boundary_knots'] = (boundary_vals[0], boundary_vals[1])
-            if 'df' in r_attrs:
-                attributes['df'] = int(r_attrs['df'])
-    
-    return basis_matrix, attributes
+    basis_matrix, knots_used, boundary_used = _r_spline_basis('ns', x, df, knots, None, intercept, boundary_knots)
+    return basis_matrix, _spline_attributes('ns', basis_matrix, knots_used, boundary_used, None, intercept)
 
 
 def smooth_spline_basis(x: np.ndarray,
-                       lambda_smooth: float = 1.0,
+                       lambda_smooth: Optional[float] = None,
                        df: Optional[int] = None,
                        knots: Optional[np.ndarray] = None) -> Tuple[np.ndarray, Dict]:
     """
-    Smoothing spline basis using R's smooth.spline via rpy2
-    
-    Creates a basis for smoothing splines using R's implementation.
-    
+    Natural-spline basis with intercept, labelled as a smoothing-spline basis.
+
+    This is NOT a smoothing spline: it returns R's ``ns(x, intercept = TRUE)`` (``df`` defaults to 4 here, unlike
+    ``ns_enhanced``, when neither ``df`` nor ``knots`` is given). ``lambda_smooth`` has no effect on the basis; a
+    value is accepted only for backwards compatibility and is reported with a ``UserWarning``.
+
     Parameters:
     -----------
     x : array-like
         Predictor variable values
-    lambda_smooth : float, default 1.0
-        Smoothing parameter (spar in R)
+    lambda_smooth : float, optional
+        Ignored (a ``UserWarning`` is issued if given). Recorded in the attributes under ``'lambda'``.
     df : int, optional
         Degrees of freedom
     knots : array-like, optional
@@ -226,20 +148,23 @@ def smooth_spline_basis(x: np.ndarray,
     Returns:
     --------
     tuple
-        - basis: Smoothing spline basis matrix
-        - attributes: Dictionary including penalty information
+        - basis: natural spline basis matrix with intercept
+        - attributes: Dictionary of the spline attributes
     """
     _check_rpy2()
     
-    x = np.asarray(x, dtype=float)
+    if lambda_smooth is not None:
+        warnings.warn("smooth_spline_basis does not fit a smoothing spline: 'lambda_smooth' is ignored and the "
+                      "basis is a natural spline with intercept", UserWarning, stacklevel=2)
     
-    # Use R's smooth.spline as base for smoothing spline basis
-    # This is a simplified implementation - full smoothing splines are more complex
+    if df is None and knots is None:
+        df = 4
     basis_matrix, attributes = ns_enhanced(x, df=df, knots=knots, intercept=True)
     
     # Add smoothing attributes
-    attributes['lambda'] = lambda_smooth
     attributes['fun'] = 'smooth.spline'
+    if lambda_smooth is not None:
+        attributes['lambda'] = lambda_smooth
     
     return basis_matrix, attributes
 

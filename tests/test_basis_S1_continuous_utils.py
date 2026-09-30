@@ -5,36 +5,30 @@ user-defined function), the R-splines wrappers in enhanced_splines.py, and the k
 utils.py (equalknots(), logknots(), exphist()).  The reference is always computed by R at test time (dlnm 2.4.10 and
 splines), never copied from Python output.  Where R itself raises, the faithful behaviour is that PyDLNM raises too.
 
-Known defects (strict xfail, @known_defect('S1', ...); each test asserts the R-faithful behaviour)
+Findings covered (all fixed: every test is an ordinary test that asserts the R-faithful behaviour)
 
-  basis-cont-3     ns/bs with neither df nor knots: R has no interior knots (1 / `degree` columns), Python hard-codes
+  basis-cont-3     ns/bs with neither df nor knots: R has no interior knots (1 / `degree` columns); Python used to hard-code
                    df=4 (OneBasis, enhanced_splines, CrossBasis with a bare argvar)
-  basis-cont-6     PolynomialBasis: NaN/Inf/all-NaN x crash (R: NaN rows, scale ignores NaN), float degree, degree=0,
+  basis-cont-6     PolynomialBasis: NaN/Inf/all-NaN x (R: NaN rows, scale ignores NaN), float degree, degree=0,
                    constant x=0 (R: 0/0 = NaN)
-  basis-cont-7,    equalknots: equally spaced VALUES along range(x) (Python: quantiles), nk / intercept arguments,
+  basis-cont-7,    equalknots: equally spaced VALUES along range(x) (not quantiles), nk / intercept arguments,
   crossbasis-13    df=1 default, R's knot counts (bs df-degree-intercept, strata df-intercept), errors when no knots
-  basis-cont-8     user-defined callable: crosspred(OneBasis) replays 'range', `cen` is not passed to a function that
-                   declares it, attributes returned by the function are lost
+  basis-cont-8     user-defined callable: crosspred(OneBasis) replays 'range', `cen` is passed to a function that
+                   declares it, attributes returned by the function are kept
   basis-cont-12    ns at a single x (and a single non-missing x): R defaults Boundary.knots to x * c(7, 9) / 8
-  basis-cont-13    scalar knots (float / np.float64 / 0-d) crash ns/bs (OneBasis, enhanced_splines, CrossBasis)
-  basis-cont-14    OneBasis.summary() reports the requested df, not the number of columns (R: df = ncol)
-  basis-cont-15    enhanced_splines: attributes lack R's knots / boundary knots; smooth_spline_basis silently ignores
-                   lambda_smooth
+  basis-cont-13    scalar knots (float / np.float64 / 0-d) for ns/bs (OneBasis, enhanced_splines, CrossBasis)
+  basis-cont-14    OneBasis.summary() reports the number of columns (R: df = ncol), not the requested df
+  basis-cont-15    enhanced_splines: attributes carry R's knots / boundary knots; smooth_spline_basis does not
+                   silently ignore lambda_smooth (UserWarning)
   crossbasis-12    exphist: default lag c(0, length(exp) - 1), `times` are 1-based indices of any length (rounded,
                    fill outside the series), and it is not quadratic in n
   crossbasis-14    logknots: bare call (df=1) has no knots and errors in R, NaN in a range vector, non-integer lag
                    range is rounded by mklag
 
-Plain (unmarked) tests guard what is already faithful and must stay so while the fixes land: ns/bs with explicit df,
-knots, degree, intercept and Boundary.knots (also NaN, tiny and constant x, knot container types, integer / list x),
-lin / poly without NaN, `cen` stored as an attribute, bs at a single x, ns at 2..5 points, custom callables that accept
-**kwargs, crosspred(OneBasis) for lin / poly, enhanced bs/ns numerics, exphist with default times, logknots for
-nk / df / fun / degree / intercept grids, equalknots for uniformly spaced x.
-
-Patch notes (audit_handoff_2026-09-29/patches): every known-defect test passes with the patch of its own finding applied
-alone to the pristine tree.  basis-cont-7 and crossbasis-13 are two patches for the same equalknots port; crossbasis-12,
-crossbasis-14 and crossbasis-13 (in this order) apply together and fix all utils tests.  basis-cont-3, -12, -13 and -15
-overlap textually in basis_functions.py / enhanced_splines.py and cannot be applied on top of each other.
+Also guarded: ns/bs with explicit df, knots, degree, intercept and Boundary.knots (also NaN, tiny and constant x, knot
+container types, integer / list x), lin / poly without NaN, `cen` stored as an attribute, bs at a single x, ns at 2..5
+points, custom callables that accept **kwargs, crosspred(OneBasis) for lin / poly, enhanced bs/ns numerics, exphist with
+default times, logknots for nk / df / fun / degree / intercept grids, equalknots for uniformly spaced x.
 """
 import contextlib
 import io
@@ -45,7 +39,7 @@ import warnings
 import numpy as np
 import pytest
 
-from rhelpers import assert_close, chicago, known_defect, max_rel_diff, np2r, r, rget
+from rhelpers import assert_close, chicago, max_rel_diff, np2r, r, rget
 
 import rpy2.rinterface_lib.embedded as _emb
 
@@ -327,7 +321,6 @@ _NEITHER = [('ns', {}), ('ns', {'intercept': True}), ('ns', {'Boundary_knots': _
             ('bs', {}), ('bs', {'degree': 1}), ('bs', {'degree': 2}), ('bs', {'degree': 2, 'intercept': True})]
 
 
-@known_defect(THEME, 'basis-cont-3', note='ns/bs default df=4 instead of no interior knots')
 @pytest.mark.parametrize('fun, kw', _NEITHER, ids=lambda v: v if isinstance(v, str) else _ids(v))
 def test_onebasis_neither_df_nor_knots_matches_r(fun, kw):
     """R: onebasis(x, 'ns') has 1 column, bs has `degree` columns (one more with intercept); PyDLNM gives 4."""
@@ -339,7 +332,6 @@ def test_bs_cubic_with_intercept_and_no_df_matches_r():
     assert_onebasis_matches_r(_x_normal(300, seed=3), 'bs', rtol=1e-10, degree=3, intercept=True)
 
 
-@known_defect(THEME, 'basis-cont-3', note='enhanced_splines falls back to df=4')
 @pytest.mark.parametrize('fun, kw', [('ns', {}), ('ns', {'intercept': True}), ('bs', {}), ('bs', {'degree': 2}),
                                      ('bs', {'degree': 1, 'intercept': True}),
                                      ('ns', {'boundary_knots': (-20.0, 45.0)})],
@@ -352,7 +344,6 @@ def test_enhanced_neither_df_nor_knots_matches_r(fun, kw):
     assert_matches_r(lambda: r_splines(fun, x, **kw), lambda: pyf(x, **kw)[0], f'{fun}_enhanced({_ids(kw)})', 1e-10)
 
 
-@known_defect(THEME, 'basis-cont-3', note='CrossBasis: bare argvar / hard-coded df defaults (ns 4, bs 3)')
 @pytest.mark.parametrize('argvar', [{}, {'fun': 'ns'}, {'fun': 'bs'}, {'fun': 'bs', 'degree': 2}], ids=_ids)
 def test_crossbasis_bare_var_basis_matches_r(argvar):
     """argvar without df / knots (the crosspred docstring example is {'fun': 'bs'}): R gives 1 (ns) or `degree` (bs)
@@ -363,7 +354,6 @@ def test_crossbasis_bare_var_basis_matches_r(argvar):
 # =====================================================================================================================
 # basis-cont-12: ns at a single x
 # =====================================================================================================================
-@known_defect(THEME, 'basis-cont-12', note='Boundary.knots=[x, x] is injected instead of R default x*c(7,9)/8')
 @pytest.mark.parametrize('x, kw', [
     ([5.0], {'df': 3}), ([5.0], {'df': 2, 'intercept': True}), ([5.0], {'df': 1}), ([5.0], {'knots': [5.2]}),
     ([-3.0], {'df': 3}),
@@ -378,7 +368,6 @@ def test_ns_single_point_matches_r(x, kw):
 # =====================================================================================================================
 # basis-cont-13: scalar knots
 # =====================================================================================================================
-@known_defect(THEME, 'basis-cont-13', note="np.asarray(scalar) is 0-d: rpy2 'dims' cannot be of length 0")
 @pytest.mark.parametrize('kind', ['float', 'np.float64', 'quantile', 'zero-d'])
 @pytest.mark.parametrize('fun', ['ns', 'bs'])
 def test_scalar_knot_matches_r(fun, kind):
@@ -391,7 +380,6 @@ def test_scalar_knot_matches_r(fun, kind):
     assert_matches_r(ref, lambda: py_onebasis(x, fun, knots=knot).basis, f'{fun} scalar knot ({kind})', 1e-10)
 
 
-@known_defect(THEME, 'basis-cont-13', note='enhanced_splines: same 0-d knots problem')
 @pytest.mark.parametrize('fun', ['ns', 'bs'])
 def test_enhanced_scalar_knot_matches_r(fun):
     import enhanced_splines as es
@@ -402,7 +390,6 @@ def test_enhanced_scalar_knot_matches_r(fun):
                      f'{fun}_enhanced scalar knot', 1e-10)
 
 
-@known_defect(THEME, 'basis-cont-13', note='CrossBasis time-series builder sends 0-d knots to R')
 @pytest.mark.parametrize('argvar, arglag', [
     ({'fun': 'ns', 'knots': np.float64(10.0)}, {'fun': 'ns', 'knots': np.array([1.0, 3.0])}),
     ({'fun': 'bs', 'knots': np.float64(10.0), 'degree': 2}, {'fun': 'ns', 'knots': np.array([1.0, 3.0])}),
@@ -446,7 +433,6 @@ def _with_nan(n=150, seed=11, at=(0, 7, 60)):
     return x
 
 
-@known_defect(THEME, 'basis-cont-6', note="sklearn PolynomialFeatures rejects NaN ('Input X contains NaN')")
 @pytest.mark.parametrize('kw', [
     {'degree': 2}, {'degree': 3, 'intercept': True}, {'degree': 2, 'scale': 30.0},
     {'degree': 1, 'intercept': True, 'scale': 30.0},
@@ -456,7 +442,6 @@ def test_poly_nan_in_x_gives_nan_rows_like_r(kw):
     assert_onebasis_matches_r(_with_nan(), 'poly', rtol=1e-12, **kw)
 
 
-@known_defect(THEME, 'basis-cont-6', note='NaN in x: scale attribute uses np.max (NaN) instead of na.rm')
 def test_poly_scale_attribute_ignores_nan():
     x = _with_nan()
     r_onebasis(x, 'poly', degree=2)
@@ -465,7 +450,6 @@ def test_poly_scale_attribute_ignores_nan():
                  what='poly scale attribute with NaN in x')
 
 
-@known_defect(THEME, 'basis-cont-6', note='all-NaN and Inf x are accepted by R (NaN cells), rejected by sklearn')
 @pytest.mark.parametrize('kind', ['all-NaN', 'Inf'])
 def test_poly_all_nan_and_inf_x_match_r(kind):
     x = np.full(8, np.nan) if kind == 'all-NaN' else _x_normal(50, seed=12)
@@ -474,7 +458,6 @@ def test_poly_all_nan_and_inf_x_match_r(kind):
     assert_onebasis_matches_r(x, 'poly', degree=2)
 
 
-@known_defect(THEME, 'basis-cont-6', note='degree=2.0 / np.float64: sklearn InvalidParameterError')
 @pytest.mark.parametrize('degree', [2.0, np.float64(3.0)], ids=['float', 'np.float64'])
 @pytest.mark.parametrize('intercept', [False, True])
 def test_poly_float_degree_matches_r(degree, intercept):
@@ -485,7 +468,6 @@ def test_poly_float_degree_matches_r(degree, intercept):
                      f'poly degree={degree!r}', 1e-12)
 
 
-@known_defect(THEME, 'basis-cont-6', note='degree=0 without intercept: R returns the 1:0 quirk (2 columns), Python raises')
 def test_poly_degree_zero_matches_r():
     """outer(x/scale, (1-intercept):degree) with degree 0 and no intercept is the sequence 1:0, i.e. columns x and 1."""
     assert_onebasis_matches_r(_x_normal(60, seed=14), 'poly', degree=0)
@@ -495,7 +477,6 @@ def test_poly_degree_zero_with_intercept_matches_r():
     assert_onebasis_matches_r(_x_normal(60, seed=14), 'poly', degree=0, intercept=True)
 
 
-@known_defect(THEME, 'basis-cont-6', note='constant x = 0: scale 0 is replaced by 1 in Python; R gives 0/0 = NaN')
 @pytest.mark.parametrize('intercept', [False, True])
 def test_poly_constant_zero_x_matches_r(intercept):
     """Deliberate Python deviation (scale 0 -> 1); R-faithful is NaN (with the intercept column equal to 1)."""
@@ -577,7 +558,6 @@ def _cenfun(x, cen=None):
     return (np.asarray(x, dtype=float) - (0.0 if cen is None else cen)).reshape(-1, 1)
 
 
-@known_defect(THEME, 'basis-cont-8', note="cen is popped before the call: a function with a 'cen' formal never gets it")
 def test_custom_callable_receives_cen_like_r():
     """R: checkonebasis keeps `cen` in the arguments when the function declares a `cen` formal."""
     x = _temp(20)
@@ -596,7 +576,6 @@ def _attrfun(x, s=3):
     return m
 
 
-@known_defect(THEME, 'basis-cont-8', note='np.asarray strips the attributes of the basis returned by the function')
 def test_custom_callable_attributes_are_kept_like_r():
     """R: attributes(basis) of the returned matrix are copied into the onebasis object (here 'scale')."""
     x = _temp(20)
@@ -654,7 +633,6 @@ _KX = _x_normal(250, seed=15)
 _KQ = np.quantile(_KX, [.2, .4, .6, .8])
 
 
-@known_defect(THEME, 'basis-cont-14', note='summary() prints the requested/default df, not ncol')
 @pytest.mark.parametrize('fun, kw', [
     ('ns', {'knots': _KQ[:2]}), ('ns', {'knots': _KQ[:1]}), ('ns', {'df': 5, 'knots': _KQ[:3]}),
     ('bs', {'knots': _KQ}), ('bs', {'knots': _KQ[:3], 'degree': 2}), ('bs', {'df': 8, 'knots': _KQ[:1]}),
@@ -709,7 +687,6 @@ def test_enhanced_class_wrappers_match_functions(fun):
     assert_close(cls(**kw)(x), f(x, **kw)[0], rtol=1e-14, what=f'Enhanced {fun} class')
 
 
-@known_defect(THEME, 'basis-cont-15', note='attribute capture is dead code under the numpy2ri converter')
 @pytest.mark.parametrize('fun, kw', [
     ('ns', {'df': 5}), ('ns', {'knots': _KQ[:3]}), ('ns', {'df': 4, 'boundary_knots': (-20.0, 45.0)}),
     ('bs', {'df': 6, 'degree': 2}), ('bs', {'knots': _KQ[:2], 'boundary_knots': (-20.0, 45.0)}),
@@ -730,7 +707,6 @@ def test_enhanced_attributes_report_r_knots_and_boundary(fun, kw):
     assert attrs.get('n_basis', basis.shape[1]) == basis.shape[1]
 
 
-@known_defect(THEME, 'basis-cont-15', note='lambda_smooth is stored in the attributes but has no effect on the basis')
 def test_smooth_spline_basis_lambda_is_not_silently_ignored():
     """smooth_spline_basis is documented as a smoothing-spline basis controlled by lambda_smooth.  Either the basis
     depends on lambda_smooth, or the function must say (UserWarning) that the value is ignored."""
@@ -777,7 +753,6 @@ def test_equalknots_uniform_x_ns_matches_r(df):
     assert msg is None, msg
 
 
-@known_defect(THEME, 'basis-cont-7', 'crossbasis-13', note='quantiles of x instead of equally spaced values; wrong counts')
 @pytest.mark.parametrize('intercept', [False, True])
 @pytest.mark.parametrize('fun', ['ns', 'bs', 'strata'])
 def test_equalknots_df_grid_matches_r(fun, intercept):
@@ -795,14 +770,12 @@ def test_equalknots_df_grid_matches_r(fun, intercept):
     assert not bad, f'{len(bad)} configurations differ from R:\n' + '\n'.join(bad[:6])
 
 
-@known_defect(THEME, 'basis-cont-7', 'crossbasis-13', note='no nk argument (TypeError)')
 @pytest.mark.parametrize('nk', [1, 2, 3, 4])
 def test_equalknots_nk_matches_r(nk):
     msg = _equalknots_r_vs_py(_x_gamma(), f'equalknots(nk={nk})', nk=nk)
     assert msg is None, msg
 
 
-@known_defect(THEME, 'basis-cont-7', 'crossbasis-13', note='knots from quantiles of the non-missing values')
 def test_equalknots_use_the_range_and_ignore_nan():
     """R: range(x, na.rm=TRUE) and equal spacing along it, whatever the distribution of x."""
     x = _x_gamma(300, seed=4)
@@ -811,7 +784,6 @@ def test_equalknots_use_the_range_and_ignore_nan():
     assert msg is None, msg
 
 
-@known_defect(THEME, 'basis-cont-7', 'crossbasis-13', note='defaults df=5 and silent [] instead of the R errors')
 @pytest.mark.parametrize('kw', [
     {}, {'fun': 'ns', 'df': 1}, {'fun': 'ns', 'df': 2, 'intercept': True}, {'fun': 'bs', 'df': 3},
     {'fun': 'bs', 'df': 4, 'intercept': True}, {'fun': 'bs', 'df': 2, 'degree': 1, 'intercept': True},
@@ -866,7 +838,6 @@ def test_logknots_range_of_a_vector_matches_r(x):
     assert msg is None, msg
 
 
-@known_defect(THEME, 'crossbasis-14', note='nk falls back to 1 when neither nk nor df is given')
 @pytest.mark.parametrize('kw', [{}, {'intercept': False}, {'fun': 'bs'}, {'fun': 'strata'}], ids=_ids)
 @pytest.mark.parametrize('x', [21, [0, 21]], ids=_sid)
 def test_logknots_bare_call_raises_like_r(x, kw):
@@ -878,7 +849,6 @@ def test_logknots_bare_call_raises_like_r(x, kw):
         logknots(x, **kw)
 
 
-@known_defect(THEME, 'crossbasis-14', note='np.min / np.max of a vector with NaN is NaN')
 @pytest.mark.parametrize('x', [[0, 1, 2, np.nan, 10], [np.nan, 0, 4, 9, 10], [3, 6, 9, 30, np.nan, np.nan]], ids=_sid)
 def test_logknots_nan_in_range_vector_matches_r(x):
     """R: range(x, na.rm=TRUE) for a vector of length >= 3."""
@@ -914,7 +884,6 @@ def test_exphist_default_times_matches_r(lag):
     assert not bad, '\n'.join(bad)
 
 
-@known_defect(THEME, 'crossbasis-12', note='default lag is (0, 1) instead of c(0, length(exp) - 1)')
 @pytest.mark.parametrize('fill', [0.0, 99.0])
 def test_exphist_default_lag_matches_r(fill):
     """R: lag defaults to c(0, length(exp) - 1), a 25 x 25 matrix here; PyDLNM returns 25 x 2."""
@@ -926,7 +895,6 @@ _TIMES = {'subset': [5, 10, 20], 'first-and-last': [1, 25], 'beyond-the-end': [2
           'before-the-start': [-3, 0, 2], 'rounded': [3.4, 10.6, 17.5], 'unsorted-repeated': [12, 4, 4, 20]}
 
 
-@known_defect(THEME, 'crossbasis-12', note="times are 1-based indices of any length in R, timestamps of len(exposure) in Python")
 @pytest.mark.parametrize('lag', [[0, 4], [2, 6], [-2, 3]], ids=_sid)
 @pytest.mark.parametrize('name', list(_TIMES))
 def test_exphist_times_are_indices_like_r(name, lag):
@@ -939,7 +907,6 @@ def test_exphist_times_are_indices_like_r(name, lag):
     assert not bad, '\n'.join(bad)
 
 
-@known_defect(THEME, 'crossbasis-12', note='times taken as timestamps: 10..34 gives different values from R (silent wrong)')
 def test_exphist_times_of_the_same_length_are_indices_like_r():
     """times = 10..34 has the length of the exposure, so PyDLNM accepts it and returns a matrix of the right shape but
     with the wrong values (it treats times as timestamps of the observations, R as positions in the series)."""
@@ -948,7 +915,6 @@ def test_exphist_times_of_the_same_length_are_indices_like_r():
     assert msg is None, msg
 
 
-@known_defect(THEME, 'crossbasis-12', note='O(n^2) loops with argmin over all times (n=8000: several seconds vs R 0.03 s)')
 def test_exphist_runs_in_linear_time():
     """A 22-year daily series (n=8000), lag 0..21: R needs ~30 ms and a vectorised port a few ms, the quadratic loops
     (every (time, lag) pair scans all times) several seconds.  The result must still equal R's."""
