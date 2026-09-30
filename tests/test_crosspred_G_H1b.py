@@ -196,7 +196,6 @@ CEN = 15.0                                 # explicit numeric centering: leaves 
 
 
 # ---- basis-cont-9: cen unspecified -> median(pretty(range)) --------------------------------------------------------
-@known_defect('G', 'basis-cont-9', note='crosspred has no mkcen: cen stays None, RR relative to a different reference')
 @pytest.mark.parametrize('data', ['chicago', 'warm', 'narrow'])
 @pytest.mark.parametrize('fun', ['bs', 'ns'])
 def test_default_cen_crossbasis(fun, data):
@@ -204,14 +203,12 @@ def test_default_cen_crossbasis(fun, data):
     assert ref['cen'] is not None                       # R really auto-centres here (sanity of the reference)
 
 
-@known_defect('G', 'basis-cont-9', note='OneBasis ns/poly: no auto-centering')
 @pytest.mark.parametrize('kind', ['ns', 'poly2'])
 def test_default_cen_onebasis(kind):
     py, ref = check(make_one(kind), at=AT)
     assert ref['cen'] is not None
 
 
-@known_defect('G', 'basis-cont-9', note='reduced-coefficient (BLUP) route goes through the same _setup_predictions')
 def test_default_cen_reduced_coefficients_route():
     """crosspred(cb, coef=<var-basis coefficients>) is R's crosspred(onebasis, coef, vcov); cen unspecified."""
     cb = make_cb('ns')
@@ -229,7 +226,6 @@ def test_default_cen_reduced_coefficients_route():
     assert_close(py.allse, rget('as.numeric(g1rp$allse)'), what='allse')
 
 
-@known_defect('G', 'basis-cont-9', note='cen=True is centred at basis(1.0), cen=False at basis(0.0)')
 @pytest.mark.parametrize('cen', [True, False])
 @pytest.mark.parametrize('fun', ['bs', 'ns'])
 def test_cen_logical_crossbasis(fun, cen):
@@ -237,7 +233,6 @@ def test_cen_logical_crossbasis(fun, cen):
     check(make_cb(fun), at=AT, cen=cen)
 
 
-@known_defect('G', 'basis-cont-9', note='logical cen must be ignored (NULL) for lin/strata/thr; Python subtracts basis(1.0)/(0.0)')
 @pytest.mark.parametrize('cen', [True, False])
 @pytest.mark.parametrize('kind', ['lin', 'strata', 'thr'])
 def test_cen_logical_ignored_for_lin_strata_thr(kind, cen):
@@ -247,7 +242,6 @@ def test_cen_logical_ignored_for_lin_strata_thr(kind, cen):
 
 
 # ---- basis-cont-11: intercept=TRUE in the var basis nullifies cen -----------------------------------------------------
-@known_defect('G', 'basis-cont-11', 'basis-cont-9', note='cen is applied although the var basis has intercept=TRUE')
 @pytest.mark.parametrize('kind', ['lin_int', 'poly2_int', 'ns_int'])
 def test_intercept_basis_drops_explicit_cen(kind):
     py, ref = check(make_one(kind), at=AT, cen=18.0)
@@ -295,8 +289,6 @@ def test_cen_stored_in_argvar_is_used_and_can_be_overridden():
 # THEME H1b: mkat (prediction grid)
 # ===============================================================================================================
 # ---- default grid: pretty(range, n=50) restricted to [from, to] --------------------------------------------------------
-@known_defect('H1b', 'crosspred-core-3', 'crosspred-grid-2', 'centering-5', 'validation-audit-7',
-              note='default grid is linspace(range, 21 points); R uses pretty(range, n=50) (60 points on chicago)')
 @pytest.mark.parametrize('kind,data', [('cb_bs', 'chicago'), ('cb_ns', 'chicago'), ('cb_bs', 'warm'),
                                        ('cb_bs', 'narrow'), ('ob_lin', 'chicago')])
 def test_default_grid(kind, data):
@@ -313,8 +305,6 @@ _FROM_TO = [
 ]
 
 
-@known_defect('H1b', 'crosspred-core-3', 'crosspred-grid-2', 'centering-5',
-              note='from/to without by: Python uses a 21-point arange, R the pretty(n=50) grid inside [from,to]')
 @pytest.mark.parametrize('kw', _FROM_TO, ids=lambda k: ','.join(f'{a}={b:g}' for a, b in k.items()))
 def test_from_to_without_by_grid(kw):
     check(make_cb('bs'), cen=CEN, **kw)
@@ -333,14 +323,11 @@ _BY_DEFECT = [
 ]
 
 
-@known_defect('H1b', 'crosspred-core-3', 'crosspred-grid-2', 'centering-5', 'validation-audit-7',
-              note='by-grid: start must be min(pretty(c(from,to), n=max(1,diff(range)/by))) and seq() never passes `to`')
 @pytest.mark.parametrize('kw', _BY_DEFECT, ids=lambda k: ','.join(f'{a}={b:g}' for a, b in k.items()))
 def test_by_grid(kw):
     check(make_cb('bs'), cen=CEN, **kw)
 
 
-@known_defect('H1b', 'validation-audit-7', 'crosspred-grid-2', note='np.arange(start, to+by/2, by) overshoots `to`')
 @pytest.mark.parametrize('kw', [dict(from_val=0.05, to_val=30.02, by=0.1), dict(from_val=-3.0, to_val=31.0, by=2.5),
                                 dict(by=7.0), dict(by=0.7)], ids=lambda k: ','.join(f'{a}={b:g}' for a, b in k.items()))
 def test_by_grid_never_exceeds_upper_limit(kw):
@@ -363,8 +350,6 @@ def test_by_grid_aligned_with_R(kw):
     check(make_cb('bs'), cen=CEN, **kw)
 
 
-@known_defect('H1b', 'crosspred-grid-2', 'centering-5', 'validation-audit-7',
-              note='narrow exposure range (3.5 units): by-grid start/count and from/to grid differ from mkat')
 @pytest.mark.parametrize('kw', [dict(by=0.2), dict(from_val=-33.1, to_val=-30.05, by=0.2), dict(from_val=-32.5)],
                          ids=lambda k: ','.join(f'{a}={b:g}' for a, b in k.items()))
 def test_grid_on_narrow_exposure_range(kw):
@@ -382,15 +367,12 @@ _AT_DEFECT = {
 }
 
 
-@known_defect('H1b', 'crosspred-grid-11', 'crosspred-core-3', 'centering-5',
-              note='`at` is used verbatim: R returns sort(unique(at)) without NA')
 @pytest.mark.parametrize('name', list(_AT_DEFECT))
 def test_at_is_sorted_unique_nan_free(name):
     py, ref = check(make_cb('bs'), cen=CEN, at=_AT_DEFECT[name])
     assert ref['predvar'].size == np.unique(_AT_DEFECT[name][~np.isnan(_AT_DEFECT[name])]).size
 
 
-@known_defect('H1b', 'crosspred-grid-11', note='scalar `at` raises inside rpy2 (0-d array); R accepts at=5')
 @pytest.mark.parametrize('at', [5.0, 5, np.float64(-3.5)], ids=['float', 'int', 'np.float64'])
 def test_scalar_at(at):
     py, ref = check(make_cb('bs'), cen=CEN, at=at)
@@ -477,14 +459,12 @@ def _py_mmt(case, **kw):
     return float(_quiet(find_mmt, case.py, None, coef=case.coef, vcov=case.vcov, **kw)['mmt'])
 
 
-@known_defect('H1b', 'centering-5', 'crosspred-grid-2', note='find_mmt searches the 21-point linspace, not R\'s pretty() grid')
 @pytest.mark.parametrize('kw', [dict(), dict(by=1.0), dict(by=0.7)], ids=['default', 'by1', 'by0.7'])
 def test_find_mmt_grid_matches_R_argmin(kw):
     c = make_cb('bs')
     assert _py_mmt(c, **kw) == pytest.approx(_r_mmt(c, cen=CEN, **kw), abs=1e-9)
 
 
-@known_defect('H1b', 'centering-5', 'crosspred-grid-11', note='NaN in `at` makes find_mmt return NaN (argmin hits the NaN row)')
 def test_find_mmt_with_nan_in_at():
     c = make_cb('bs')
     at = np.array([-10.0, 0.0, 5.0, _NAN, 12.0, 20.0, 28.0])
@@ -500,8 +480,6 @@ def test_find_mmt_on_explicit_sorted_grid_matches_R_argmin():
 # ===============================================================================================================
 # G + H1b together: the bare crosspred(cb, coef=, vcov=) call that every R tutorial starts with
 # ===============================================================================================================
-@known_defect('G+H1b', 'basis-cont-9', 'crosspred-core-3', 'crosspred-grid-2', 'centering-5',
-              note='no mkcen and no mkat: default grid AND default centering both differ')
 @pytest.mark.parametrize('fun', ['bs', 'ns'])
 def test_fully_default_call(fun):
     py, ref = check(make_cb(fun))

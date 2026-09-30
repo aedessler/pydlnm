@@ -171,7 +171,6 @@ def test_reduced_first_lag_column_matches_r_onebasis(name):
         assert_close(np.asarray(getattr(pp, f))[:, 0], rget(f'pR${f}')[:, 0], rtol=1e-12, what=f + '[:, 0]')
 
 
-@known_defect(*DEFECT_R, note=REDUCED_NOTE)
 @pytest.mark.parametrize('name', NAMES)
 def test_reduced_lag_range_is_onebasis_lag0(name):
     """R: crosspred(onebasis) has lag=c(0,0), bylag=1 and a single column named 'lag0'."""
@@ -181,7 +180,6 @@ def test_reduced_lag_range_is_onebasis_lag0(name):
     assert float(pp.bylag) == rget('pR$bylag')[0]
 
 
-@known_defect(*DEFECT_R, note=REDUCED_NOTE)
 @pytest.mark.parametrize('name,link', NAMES_LINKS, ids=ids_nl)
 def test_reduced_lag_specific_fields_match_r_onebasis(name, link):
     """R: matfit/matse/matRR*/matlow/mathigh have one column ('lag0'); PyDLNM returns L+1 identical copies of the
@@ -190,7 +188,6 @@ def test_reduced_lag_specific_fields_match_r_onebasis(name, link):
     _compare(pp, _fields('mat', link))
 
 
-@known_defect(*DEFECT_R, note=REDUCED_NOTE)
 @pytest.mark.parametrize('name,link', NAMES_LINKS, ids=ids_nl)
 def test_reduced_cumulative_fields_match_r_onebasis(name, link):
     """R (cumul=TRUE): cumfit/cumse/cumRR*/cumlow/cumhigh are (n,1) with cumfit == allfit; PyDLNM returns (n, L+1)
@@ -199,7 +196,6 @@ def test_reduced_cumulative_fields_match_r_onebasis(name, link):
     _compare(pp, _fields('cum', link) + _fields('all', link))
 
 
-@known_defect('R', 'crosspred-grid-13', 'validation-audit-17', note='bylag on reduced coefficients duplicates columns')
 @pytest.mark.parametrize('bylag', [0.5, 0.25])
 def test_reduced_bylag_gives_single_column_like_r(bylag):
     """R: with lag c(0,0) any bylag still gives seqlag(c(0,0), bylag) == 0, i.e. one column; PyDLNM returns
@@ -208,7 +204,6 @@ def test_reduced_bylag_gives_single_column_like_r(bylag):
     _compare(pp, _fields('mat', 'log') + _fields('all', 'log'))
 
 
-@known_defect('R', 'crosspred-core-12', note='diagnostic print() calls in the reduced branch (prediction.py)')
 def test_reduced_crosspred_prints_nothing(capsys):
     """R prints nothing; PyDLNM prints 'Detected reduced coefficients ...' / 'Variable basis created ...'."""
     from prediction import crosspred

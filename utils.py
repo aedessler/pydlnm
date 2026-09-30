@@ -5,6 +5,7 @@ This module contains core utility functions that support the main DLNM functiona
 including lag parameter validation, sequence generation, and exposure history construction.
 """
 
+import math
 import numpy as np
 from typing import Union, List, Tuple, Optional, Any
 import warnings
@@ -115,6 +116,112 @@ def seqlag(lag: Union[np.ndarray, List[int], Tuple[int, ...]],
         return np.array([start])
     values = start + np.arange(int(n + 1e-10) + 1) * by
     return np.minimum(values, stop) if by > 0 else np.maximum(values, stop)
+
+
+_DBL_EPS = np.finfo(float).eps
+_DBL_MIN = np.finfo(float).tiny
+
+
+def pretty(x, n=5, min_n=None, shrink_sml=0.75, high_u_bias=1.5, u5_bias=None, eps_correct=0):
+    """
+    Port of R's pretty() (pretty.default / R_pretty): about n + 1 equally spaced "round" values that
+    cover range(x). Used for the default prediction grid (mkat) and the automatic centering value
+    (mkcen) of crosspred. Agrees with R to rounding error (3005 of 3006 random ranges and n tested); only
+    degenerate ranges narrower than ~1e-13 relative to their magnitude can differ in length.
+    """
+    x = np.asarray(x, dtype=float)
+    x = x[np.isfinite(x)]
+    if x.size == 0:
+        return x
+    lo, up = float(x.min()), float(x.max())
+    ndiv = int(n)
+    if ndiv < 0:
+        raise ValueError("invalid 'n' argument")
+    if min_n is None:
+        min_n = ndiv // 3
+    min_n = int(min_n)
+    if shrink_sml <= 0:
+        raise ValueError("'shrink.sml' must be positive")
+    if min_n < 0 or min_n > ndiv:
+        raise ValueError("invalid 'min.n' argument")
+    h = float(high_u_bias)
+    h5 = 0.5 + 1.5 * h if u5_bias is None else float(u5_bias)
+    f_min = 2.0 ** -20
+    rounding_eps = 1e-10
+
+    dx = up - lo
+    if dx == 0 and up == 0:
+        cell = 1.0
+        i_small = True
+    else:
+        cell = max(abs(lo), abs(up))
+        U = 1 + ((1 / (1 + h)) if h5 >= 1.5 * h + 0.5 else 1.5 / (1 + h5))
+        U *= max(1, ndiv) * _DBL_EPS
+        i_small = dx < cell * U * 3
+    if i_small:
+        if cell > 10:
+            cell = 9 + cell / 10
+        cell *= shrink_sml
+        if min_n > 1:
+            cell /= min_n
+    else:
+        cell = dx
+        if ndiv > 1:
+            cell /= ndiv
+    subsmall = f_min * _DBL_MIN
+    if subsmall == 0.0:
+        subsmall = _DBL_MIN
+    if cell < subsmall:
+        cell = subsmall
+    elif cell > np.finfo(float).max / 1.25:
+        cell = np.finfo(float).max / 1.25
+
+    base = 10.0 ** math.floor(math.log10(cell))
+    unit = base
+    ns_ = 2 * base
+    if ns_ - cell < h * (cell - unit):
+        unit = ns_
+        ns_ = 5 * base
+        if ns_ - cell < h5 * (cell - unit):
+            unit = ns_
+            ns_ = 10 * base
+            if ns_ - cell < h * (cell - unit):
+                unit = ns_
+    ns = math.floor(lo / unit + rounding_eps)
+    nu = math.ceil(up / unit - rounding_eps)
+    if eps_correct and (eps_correct > 1 or not i_small):
+        lo = lo * (1 - _DBL_EPS) if lo != 0.0 else -_DBL_MIN
+        up = up * (1 + _DBL_EPS) if up != 0.0 else _DBL_MIN
+    while ns * unit > lo + rounding_eps * unit:
+        ns -= 1
+    while not math.isfinite(ns * unit):
+        ns += 1
+    while nu * unit < up - rounding_eps * unit:
+        nu += 1
+    while not math.isfinite(nu * unit):
+        nu -= 1
+    k = int(0.5 + nu - ns)
+    if k < min_n:
+        k = min_n - k
+        if ns >= 0.0:
+            nu += k // 2
+            ns -= k // 2 + k % 2
+        else:
+            ns -= k // 2
+            nu += k // 2 + k % 2
+        ndiv = min_n
+    else:
+        ndiv = k
+    # return_bounds = TRUE: the bounds cover the original range
+    if ns * unit < lo:
+        lo = ns * unit
+    if nu * unit > up:
+        up = nu * unit
+    s = np.linspace(lo, up, ndiv + 1) if ndiv > 0 else np.array([lo])
+    if not eps_correct and ndiv:
+        delta = (up - lo) / ndiv
+        s[np.abs(s) < 1e-14 * delta] = 0.0
+    return s
 
 
 def exphist(exposure: Union[np.ndarray, List[float]], 

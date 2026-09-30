@@ -196,13 +196,14 @@ def attrdl(x: np.ndarray,
             cen = np.mean(x)
             warnings.warn("Could not find MMT, using mean centering")
     
-    # Create prediction object
+    # Create prediction object (crosspred predicts on the sorted unique values, like R's mkat)
+    grid, inverse = np.unique(x, return_inverse=True)
     pred = CrossPred(
         basis=basis,
         model=model,
         coef=coef,
         vcov=vcov,
-        at=x,
+        at=grid,
         cen=cen
     )
     
@@ -216,6 +217,7 @@ def attrdl(x: np.ndarray,
         else:
             # Assume already on RR scale or identity link
             rr = pred.allfit
+    rr = rr[inverse]
     
     # Apply range filtering if specified
     if range is not None:
@@ -359,16 +361,17 @@ def _simulate_attribution_ci(x: np.ndarray,
                 basis=basis,
                 coef=coef_samples[i],
                 vcov=vcov_mat,  # Use original vcov for predictions
-                at=x,
+                at=np.unique(x),
                 cen=cen
             )
             
-            # Get relative risks
+            # Get relative risks (mapped back from the sorted unique grid to the observations)
             if hasattr(pred, 'allRRfit'):
                 rr = pred.allRRfit
             else:
                 # Convert from log scale
                 rr = np.exp(pred.allfit)
+            rr = rr[np.unique(x, return_inverse=True)[1]]
             
             # Apply range filtering
             if range_spec is not None:

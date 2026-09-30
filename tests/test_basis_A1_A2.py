@@ -127,7 +127,9 @@ def _r_pred(obj, coef, vcov, at, cen=None, lag=None, bylag=1, cumul=False):
 
 def _py_pred(basis, coef, vcov, at, cen=None, lag=None, bylag=1.0, cumul=False):
     from prediction import crosspred
-    return crosspred(basis, coef=coef, vcov=vcov, at=at, cen=cen, lag=lag, bylag=bylag, cumul=cumul)
+    # cen=None here means 'no centering' (R: cen=FALSE); R's own NULL is the automatic mid-range centering
+    return crosspred(basis, coef=coef, vcov=vcov, at=at, cen=False if cen is None else cen, lag=lag, bylag=bylag,
+                     cumul=cumul)
 
 
 def _compare_pred(py, ref, rtol=1e-8, what=''):

@@ -162,7 +162,7 @@ def find_mmt(basis: CrossBasis,
             from_val=from_val,
             to_val=to_val,
             by=by,
-            cen=None  # No centering for MMT search
+            cen=False  # No centering for MMT search (R: cen=FALSE)
         )
     except Exception as e:
         raise ValueError(f"Error creating prediction object: {e}")

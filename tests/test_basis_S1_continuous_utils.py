@@ -534,7 +534,8 @@ def _py_crosspred_onebasis(ob, at, coef, cen):
     from prediction import crosspred
     with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings():
         warnings.simplefilter('ignore')
-        p = crosspred(ob, coef=coef, vcov=np.eye(len(coef)) * 1e-4, model_link='log', at=at, cen=cen)
+        p = crosspred(ob, coef=coef, vcov=np.eye(len(coef)) * 1e-4, model_link='log', at=at,
+                      cen=False if cen is None else cen)   # None = no centering (R: cen=FALSE)
     return np.asarray(p.allfit, dtype=float).ravel(), np.asarray(p.allse, dtype=float).ravel()
 
 
