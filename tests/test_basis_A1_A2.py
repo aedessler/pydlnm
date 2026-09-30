@@ -24,7 +24,7 @@ values, the default integer lag basis, and the R errors that PyDLNM must also ra
 import numpy as np
 import pytest
 
-from rhelpers import REPO, assert_close, chicago, known_defect, np2r, r, rget
+from rhelpers import REPO, assert_close, chicago, np2r, r, rget
 
 P = 'tA_'                       # prefix of every R global created here (other modules share the R session)
 LAG = 6                         # lag of the spline lag-basis tests
@@ -206,7 +206,7 @@ def _arglag(kind, fit_lag=(0, LAG)):
 
 
 # --------------------------------------------------------------------------------------------------------------------
-# A1: CrossBasis + crosspred with a var basis given by df / poly / default thr        (known defects)
+# A1: CrossBasis + crosspred with a var basis given by df / poly / default thr        (fixed)        
 # --------------------------------------------------------------------------------------------------------------------
 @pytest.mark.parametrize('cen', [CEN, None], ids=['cen18', 'nocen'])
 @pytest.mark.parametrize('argvar', DF_VAR)
@@ -296,7 +296,7 @@ def test_attrdl_forward_af_df_var_basis(argvar):
 
 
 # --------------------------------------------------------------------------------------------------------------------
-# A1: OneBasis attributes and crosspred(OneBasis)                                     (known defects)
+# A1: OneBasis attributes and crosspred(OneBasis)                                     (fixed)        
 # --------------------------------------------------------------------------------------------------------------------
 @pytest.mark.parametrize('spec', SPLINE_ONEBASIS)
 def test_onebasis_spline_records_knots_and_boundary_knots(spec):
@@ -330,7 +330,7 @@ def test_crosspred_onebasis_thr_keeps_training_threshold(spec, cen):
 
 
 # --------------------------------------------------------------------------------------------------------------------
-# A2: lag sub-period / single lag / bylag with a spline lag basis                     (known defects)
+# A2: lag sub-period / single lag / bylag with a spline lag basis                     (fixed)        
 # --------------------------------------------------------------------------------------------------------------------
 @pytest.mark.parametrize('kind, fit_lag, pred_lag, bylag', LAG_SUB)
 def test_crosspred_cb_lag_subperiod_uses_training_lag_boundary_knots(kind, fit_lag, pred_lag, bylag):
@@ -341,7 +341,7 @@ def test_crosspred_cb_lag_subperiod_uses_training_lag_boundary_knots(kind, fit_l
 
 
 # --------------------------------------------------------------------------------------------------------------------
-# A2: integer lag basis                                                               (known defects)
+# A2: integer lag basis                                                               (fixed)        
 # --------------------------------------------------------------------------------------------------------------------
 INT_ARGLAG = [pytest.param({'fun': 'integer', 'intercept': False}, id='intercept_false'),
               pytest.param({'fun': 'integer', 'values': np.arange(0.0, 8.0)}, id='values_0to7'),
@@ -349,7 +349,6 @@ INT_ARGLAG = [pytest.param({'fun': 'integer', 'intercept': False}, id='intercept
                            id='values_0to5_intercept_false')]
 
 
-@known_defect('A2', 'basis-discrete-10', note='integer lag basis is np.eye(n_lags): intercept=FALSE and values ignored')
 @pytest.mark.parametrize('arglag', INT_ARGLAG)
 def test_crossbasis_integer_lag_intercept_and_values(arglag):
     temp = _series(300)
@@ -367,8 +366,6 @@ INT_SUB = [pytest.param((0, 5), (1, 3), {}, id='fit0-5_pred1-3'),
            pytest.param((0, 5), (1, 3), {'intercept': False}, id='intercept_false_pred1-3')]
 
 
-@known_defect('A2', 'basis-discrete-10', note='crosspred at a lag sub-period builds eye(n_predlag), not the fitted '
-                                              'lag indicator matrix (matmul mismatch)')
 @pytest.mark.parametrize('fit_lag, pred_lag, extra', INT_SUB)
 def test_crosspred_integer_lag_subperiod(fit_lag, pred_lag, extra):
     temp = _series(400)
@@ -383,7 +380,6 @@ ONEBASIS_INTEGER = [pytest.param({}, id='default'),
                     pytest.param({'values': np.arange(1.0, 6.0)}, id='values_1to5')]
 
 
-@known_defect('A2', 'basis-discrete-10', note="OneBasis has no 'integer' function (ValueError: Unknown function)")
 @pytest.mark.parametrize('spec', ONEBASIS_INTEGER)
 def test_onebasis_integer_matches_r(spec):
     x = np.random.default_rng(5).integers(1, 6, 40).astype(float)

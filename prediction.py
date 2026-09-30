@@ -91,10 +91,9 @@ def mkxpred(basis, at, predlag=None, cen=None) -> np.ndarray:
         n_lag = len(predlag)
         n = at.shape[0]
         var_basis = OneBasis(at.ravel(), **basis.argvar).basis
-        if basis.arglag.get('fun') == 'integer':
-            lag_basis = np.eye(n_lag)
-        else:
-            lag_basis = OneBasis(predlag, **basis.arglag).basis
+        # R: onebasis(predlag, <resolved arglag>); for 'integer' this is integer(predlag, values = <fitted lags>,
+        # intercept), so a lag sub-period gives the rows of the fitted indicator matrix
+        lag_basis = OneBasis(predlag, **basis.arglag).basis
         if cen is not None:
             var_basis = var_basis - OneBasis([cen], **basis.argvar).basis
         if at.ndim == 2:

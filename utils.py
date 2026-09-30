@@ -258,31 +258,33 @@ def lagmatrix(values: Union[np.ndarray, List[float]], lags: Union[np.ndarray, Li
 
 
 def exphist(exposure: Union[np.ndarray, List[float]], 
-            times: Optional[Union[np.ndarray, List[float]]] = None,
-            lag: Union[np.ndarray, List[int], Tuple[int, ...]] = (0, 1),
+            times: Optional[Union[float, np.ndarray, List[float]]] = None,
+            lag: Optional[Union[int, np.ndarray, List[int], Tuple[int, ...]]] = None,
             fill: float = 0.0) -> np.ndarray:
     """
-    Construct exposure history matrices from time series data.
-    
-    This function creates a matrix where each row represents the exposure history
-    at different time points, accounting for the specified lag structure.
-    
+    Define exposure histories from an exposure profile (port of R's ``exphist()``).
+
+    The exposure profile ``exposure`` is assumed defined forward in time at equally spaced units from time 1
+    (``exposure[0]`` is time 1). The history over the lag period ``lag`` is evaluated backward in time from each
+    entry of ``times``. Positions outside the profile are filled with ``fill``.
+
     Parameters
     ----------
     exposure : array-like
-        Vector of exposure values
-    times : array-like, optional
-        Time points corresponding to exposures. If None, uses sequential integers.
-    lag : array-like, default=(0, 1)
-        Two-element array [min_lag, max_lag] specifying lag range
+        Exposure profile (R: ``exp``)
+    times : scalar or array-like, optional
+        Time points at which the histories are evaluated: rounded, 1-based positions in ``exposure`` (they may be
+        of any length and may lie outside 1..len(exposure)). Default: every time point, 1..len(exposure).
+    lag : int or array-like of length 2, optional
+        Maximum lag or lag range (see ``mklag``). Default: ``[0, len(exposure) - 1]``, as in R.
     fill : float, default=0.0
-        Value to use for padding when exposure history extends beyond available data
+        Value used for the positions of a history that fall before the start or after the end of the profile
         
     Returns
     -------
     np.ndarray
-        Matrix of exposure histories. Each row represents exposure history at a time point,
-        with columns representing different lag values.
+        Matrix with one row per entry of ``times`` and one column per lag ``lag[0]..lag[1]``: entry ``(i, j)`` is
+        ``exposure`` at time ``times[i] - lag[0] - j``.
         
     Examples
     --------
@@ -294,168 +296,178 @@ def exphist(exposure: Union[np.ndarray, List[float]],
            [4., 3., 2., 1.],
            [5., 4., 3., 2.]])
     """
-    exposure = np.asarray(exposure)
-    lag = mklag(lag)
+    exposure = np.asarray(exposure, dtype=float).ravel()
+    n = len(exposure)
     
+    # R: lag <- if(missing(lag)) c(0, length(exp)-1) else mklag(lag)
+    lag = np.array([0, n - 1]) if lag is None else mklag(lag)
+    
+    # R: times <- if(missing(times)) seq(length(exp)) else round(times)
     if times is None:
-        times = np.arange(len(exposure))
+        times = np.arange(1, n + 1)
     else:
-        times = np.asarray(times)
-        
-    if len(times) != len(exposure):
-        raise ValueError("times and exposure must have the same length")
+        times = np.round(np.atleast_1d(np.asarray(times, dtype=float)).ravel())
+        if times.size == 0 or not np.all(np.isfinite(times)):
+            raise ValueError("'times' must be a non-empty vector of finite values")
+        times = times.astype(np.int64)
     
-    # Create lag sequence
-    lag_seq = seqlag(lag)
-    n_times = len(times)
-    n_lags = len(lag_seq)
+    # Extend the profile with `fill` on both sides, as much as the histories need
+    left = max(0, int(lag[1]) + 1 - int(times.min()))
+    right = max(0, int(times.max()) - n - int(lag[0]))
+    extended = np.concatenate([np.full(left, fill, dtype=float), exposure, np.full(right, fill, dtype=float)])
     
-    # Initialize output matrix
-    hist_matrix = np.full((n_times, n_lags), fill, dtype=float)
-    
-    # Fill in exposure histories
-    for i, time_point in enumerate(times):
-        for j, lag_val in enumerate(lag_seq):
-            # Find the index for the lagged time point
-            target_time = time_point - lag_val
-            
-            # Find closest time point (simple approach)
-            time_diffs = np.abs(times - target_time)
-            min_idx = np.argmin(time_diffs)
-            
-            # Only use if the match is exact (for integer lags) or very close
-            if np.abs(times[min_idx] - target_time) < 0.5:
-                hist_matrix[i, j] = exposure[min_idx]
-            # Otherwise keep the fill value
-                
-    return hist_matrix
+    # History of time t over lag[0]..lag[1]: the profile at t - lag (1-based), shifted by the left padding
+    lags = np.arange(int(lag[0]), int(lag[1]) + 1)
+    return extended[times[:, None] - lags[None, :] + left - 1]
+
+
+_KNOT_FUNCTIONS = ("ns", "bs", "strata")
+
+
+def _match_knot_function(fun: str) -> str:
+    """R's ``match.arg(fun, c("ns", "bs", "strata"))``: exact or unique partial match, otherwise an error."""
+    if fun in _KNOT_FUNCTIONS:
+        return fun
+    matches = [f for f in _KNOT_FUNCTIONS if isinstance(fun, str) and fun != "" and f.startswith(fun)]
+    if len(matches) != 1:
+        raise ValueError(f"'fun' should be one of {', '.join(repr(f) for f in _KNOT_FUNCTIONS)}")
+    return matches[0]
+
+
+def _number_of_knots(fun: str, df: float, degree: float, intercept: bool) -> float:
+    """Number of knots (or cut-offs) implied by fun, df, degree and intercept (R: the ``switch`` in
+    equalknots()/logknots())."""
+    fun = _match_knot_function(fun)
+    if fun == "ns":
+        return df - 1 - intercept
+    if fun == "bs":
+        return df - degree - intercept
+    return df - intercept
 
 
 def equalknots(x: np.ndarray, 
+               nk: Optional[int] = None,
                fun: str = "ns", 
-               df: int = 5, 
-               degree: int = 3) -> np.ndarray:
+               df: int = 1, 
+               degree: int = 3,
+               intercept: bool = False) -> np.ndarray:
     """
-    Place knots at equally-spaced values along the range of x.
+    Place knots (or cut-offs) at equally spaced values along the range of x (port of R's ``equalknots()``).
+    
+    The knots are equally spaced *values* between min(x) and max(x), not quantiles of x:
+    ``min + (max - min) / (nk + 1) * (1, ..., nk)``.
     
     Parameters
     ----------
     x : array-like
-        Input vector
-    fun : str, default="ns"
-        Basis function type (for compatibility with R dlnm)
-    df : int, default=5
-        Degrees of freedom
+        Input vector. Missing values are ignored when taking the range (a vector of length 1 or 2 is NOT a lag
+        range here).
+    nk : int, optional
+        Number of knots. If None, it is defined by ``fun``, ``df``, ``degree`` and ``intercept``
+    fun : {"ns", "bs", "strata"}, default="ns"
+        Function the knots are for (partial matching, as R's ``match.arg``); used only when ``nk`` is None
+    df : int, default=1
+        Degrees of freedom (used only when ``nk`` is None)
     degree : int, default=3
-        Spline degree
+        Degree of the piecewise polynomial (``fun="bs"``)
+    intercept : bool, default=False
+        Whether an intercept is included in the basis function
         
     Returns
     -------
     np.ndarray
         Knot positions
+
+    Raises
+    ------
+    ValueError
+        If the arguments define no knots (``nk < 1``; ns: ``df - 1 - intercept``, bs: ``df - degree - intercept``,
+        strata: ``df - intercept`` knots), or ``fun`` is not one of "ns", "bs", "strata".
     """
-    x = np.asarray(x)
+    x = np.asarray(x, dtype=float).ravel()
     x_clean = x[~np.isnan(x)]
     
     if len(x_clean) == 0:
         raise ValueError("No valid (non-NaN) values in x")
+    lower, upper = x_clean.min(), x_clean.max()
     
-    # Calculate interior knots based on df and degree
-    if fun == "ns":
-        n_interior = df - 1
-    elif fun == "bs":
-        n_interior = df - degree - 1
-    else:
-        n_interior = df - 1
+    # Choose number of knots if not provided
+    if nk is None:
+        nk = _number_of_knots(fun, df, degree, bool(intercept))
     
-    if n_interior <= 0:
-        return np.array([])
-    
-    # Place knots at equally spaced quantiles
-    quantiles = np.linspace(0, 1, n_interior + 2)[1:-1]
-    knots = np.quantile(x_clean, quantiles)
-    
-    return knots
+    # Define knots at equally spaced values along the range (R: seq(nk) is 1..nk)
+    if nk < 1:
+        raise ValueError("choice of arguments defines no knots")
+    return lower + ((upper - lower) / (nk + 1)) * np.arange(1, int(np.floor(nk)) + 1)
 
 
 def logknots(x: Union[int, List[int], np.ndarray], 
              nk: Optional[int] = None, 
              fun: str = "ns", 
-             df: Optional[int] = None, 
+             df: int = 1, 
              degree: int = 3, 
              intercept: bool = True) -> np.ndarray:
     """
-    Place knots at log-spaced values, exactly matching R dlnm logknots() behavior.
+    Place knots at log-spaced values along a lag range (port of R's ``logknots()``).
     
-    This function creates interior knots for spline functions using log-spaced positions,
-    which is particularly useful for lag-response relationships where effects decay 
-    exponentially with time.
+    Interior knots at equally spaced log-values, which is useful for lag-response relationships where effects
+    decay with the lag.
     
     Parameters
     ----------
     x : int, list, or array
-        Lag range. If single value, interpreted as [0, x]. If length 2, interpreted as range.
+        Lag range. If of length 1 or 2, it is interpreted as a lag range (see ``mklag``: a single value is
+        ``[0, x]``, or ``[x, 0]`` if negative, and the range is rounded to integers); otherwise the range of the
+        vector (missing values ignored) is used.
     nk : int, optional
-        Number of knots. If None, calculated based on fun, df, degree, intercept.
-    fun : str, default="ns"
-        Basis function type ("ns", "bs", "strata")
+        Number of knots. If None, it is defined by ``fun``, ``df``, ``degree`` and ``intercept``
+    fun : {"ns", "bs", "strata"}, default="ns"
+        Function the knots are for (partial matching, as R's ``match.arg``); used only when ``nk`` is None
     df : int, default=1
-        Degrees of freedom
+        Degrees of freedom (used only when ``nk`` is None; R's default of 1 defines no knots)
     degree : int, default=3
-        Degree of polynomial (for B-splines)
+        Degree of the piecewise polynomial (``fun="bs"``)
     intercept : bool, default=True
-        Whether intercept is included
+        Whether an intercept is included in the basis function
         
     Returns
     -------
     np.ndarray
         Log-spaced interior knot positions
+
+    Raises
+    ------
+    ValueError
+        If the range is null or the arguments define no knots (``nk < 1``)
         
     Examples
     --------
-    >>> logknots(21, df=3)  # R: logknots(21, 3)
+    >>> logknots(21, df=3)  # R: logknots(21, df=3)
     array([1.01119306, 2.77947331, 7.63995648])
     """
-    x = np.asarray(x).flatten()
+    x = np.asarray(x, dtype=float).ravel()
     
-    # If length of x is 1 or 2, interpret as lag range, otherwise take the range
+    # If length of x is 1 or 2, interpret as lag range, otherwise take the range (R: range(x, na.rm=TRUE))
     if len(x) < 3:
         lag_range = mklag(x)
     else:
-        lag_range = np.array([np.min(x), np.max(x)])
+        x_clean = x[~np.isnan(x)]
+        if len(x_clean) == 0:
+            raise ValueError("No valid (non-NaN) values in x")
+        lag_range = np.array([x_clean.min(), x_clean.max()])
     
     if np.diff(lag_range)[0] == 0:
         raise ValueError("range must be > 0")
     
     # Choose number of knots if not provided
     if nk is None:
-        # If df is provided, calculate nk from it
-        if df is not None:
-            if fun == "ns":
-                nk = df - 1 - (1 if intercept else 0)
-            elif fun == "bs":
-                nk = df - degree - (1 if intercept else 0)
-            elif fun == "strata":
-                nk = df - (1 if intercept else 0)
-            else:
-                raise ValueError(f"Unknown function type: {fun}")
-        else:
-            # Default case
-            nk = 1
+        nk = _number_of_knots(fun, df, degree, bool(intercept))
     
     if nk < 1:
         raise ValueError("choice of arguments defines no knots")
     
-    # Define knots at equally-spaced log-values along lag
-    # R formula: range[1] + exp(((1+log(diff(range)))/(nk+1))*seq(nk)-1)
-    range_start = lag_range[0]
-    range_diff = np.diff(lag_range)[0]
-    
-    # Create the sequence: seq(nk) in R is 1:nk, so in Python it's 1 to nk+1
-    seq_nk = np.arange(1, nk + 1)
-    
-    # Apply R's formula exactly
-    log_factor = (1 + np.log(range_diff)) / (nk + 1)
-    knots = range_start + np.exp(log_factor * seq_nk - 1)
-    
-    return knots
+    # Define knots at equally spaced log-values along lag:
+    # R: range[1] + exp(((1+log(diff(range)))/(nk+1))*seq(nk)-1)
+    range_diff = float(np.diff(lag_range)[0])
+    seq_nk = np.arange(1, int(np.floor(nk)) + 1)
+    return lag_range[0] + np.exp(((1 + np.log(range_diff)) / (nk + 1)) * seq_nk - 1)

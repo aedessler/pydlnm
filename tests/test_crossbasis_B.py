@@ -17,15 +17,12 @@ Findings covered
   crossbasis-4      var intercept ignored, df defaults differ from R (bare argvar / ns / bs)
   attr-point-11     coefficients fitted on the CrossBasis matrix are for the wrong basis (fit and crosspred vs R)
 
-Known-defect tests (strict xfail) assert the R-faithful behaviour; the plain tests guard the sub-space that is already
-faithful (ns/bs var with knots or df, ns/integer lag, NaN handling, lag ranges, marginal OneBasis objects, crosspred
-after CrossBasis with given coefficients) so that a fix which merely swaps in basisvar.basis / basislag.basis cannot
-regress it (in particular it must keep storing the training Boundary_knots for ns, not only for bs).
-
-Two fixes are needed for everything to pass: using basisvar.basis / basislag.basis in _create_time_series_basis
-(var/lag `fun`, intercept, argvar without fun, lag funs, fit/crosspred) and R's df=NULL default for bare ns/bs in
-basis_functions.py (test_var_bare_defaults_match_r, test_lag_bare_defaults_match_r). Strict xfail is per test case, so a
-partial fix makes the cases it repairs XPASS until their markers are removed.
+All of these are fixed (no test of this module is a known defect any more): _create_time_series_basis multiplies
+basisvar.basis / basislag.basis (var/lag `fun`, intercept, argvar without fun, lag funs, fit/crosspred), and bare
+ns/bs have R's df=NULL default in basis_functions.py (test_var_bare_defaults_match_r, test_lag_bare_defaults_match_r).
+The plain tests also guard the sub-space that was faithful before (ns/bs var with knots or df, ns/integer lag, NaN
+handling, lag ranges, marginal OneBasis objects, crosspred after CrossBasis with given coefficients), in particular that
+the training Boundary_knots are stored for ns as well as bs.
 
 Findings that are NOT covered here although they show up in the same sweeps: StrataBasis with df and no breaks as
 exposure basis (shape differs from R), default arglag (R: strata df=1), the matrix-of-lags input path and the
@@ -40,7 +37,7 @@ import os
 import numpy as np
 import pytest
 
-from rhelpers import assert_close, chicago, known_defect, np2r, r, rget
+from rhelpers import assert_close, chicago, np2r, r, rget
 
 THEME = 'B'
 RTOL = 1e-10          # cross-basis matrices agree with R to ~1e-15 whenever the right basis is built
@@ -221,23 +218,12 @@ GRID_LAG = {
 }
 
 
-def _defect_marks(*finding_ids, note=''):
-    """known_defect(...) for use in pytest.param(marks=...); with PYDLNM_XFAIL_OFF=1 the harness returns a no-op
-    usefixtures mark, which pytest.param refuses, so no mark is added then."""
-    return [] if os.environ.get('PYDLNM_XFAIL_OFF') else [known_defect(THEME, *finding_ids, note=note)]
-
-
 def _plain(table):
     """pytest params (id, spec) for a table whose defect is fixed."""
     return [pytest.param(name, spec, id=name) for name, spec in table]
 
 
-def _cases(table, defect_ids, note=''):
-    """pytest params (id, spec) all marked as known defects of theme B."""
-    return [pytest.param(name, spec, id=name, marks=_defect_marks(*defect_ids, note=note)) for name, spec in table]
-
-
-# ---------------------------------------------------------------------------------------------- known defects
+# ---------------------------------------------------------------------------------------------- var / lag functions
 @pytest.mark.parametrize('name,argvar', _plain(VAR_FUN))
 def test_var_fun_lin_poly_strata_thr_matches_r(name, argvar):
     check_crossbasis(X, LAG, argvar, LAG_NS)
@@ -261,9 +247,9 @@ def test_var_without_fun_defaults_to_ns_like_r(name, argvar):
     check_crossbasis(X, LAG, argvar, LAG_NS)
 
 
-@pytest.mark.parametrize('name,argvar', _cases(VAR_BARE, ('crossbasis-4', 'basis-discrete-1'),
-                                               'bare ns/bs: R df=NULL, PyDLNM df=4'))
+@pytest.mark.parametrize('name,argvar', _plain(VAR_BARE))
 def test_var_bare_defaults_match_r(name, argvar):
+    """Bare ns/bs (no df, no knots): R has no interior knots (ns: 1 column, bs: `degree` columns)."""
     check_crossbasis(X, LAG, argvar, LAG_NS)
 
 
@@ -272,9 +258,9 @@ def test_lag_fun_matches_r(name, arglag):
     check_crossbasis(X, LAG, VAR_BS2, arglag)
 
 
-@pytest.mark.parametrize('name,arglag', _cases(LAG_BARE, ('crossbasis-4', 'basis-discrete-1'),
-                                               'bare lag ns/bs: R df=NULL, PyDLNM df=4'))
+@pytest.mark.parametrize('name,arglag', _plain(LAG_BARE))
 def test_lag_bare_defaults_match_r(name, arglag):
+    """Bare lag ns/bs (with the lag intercept): no interior knots, as in R."""
     check_crossbasis(X, LAG, VAR_BS2, arglag)
 
 

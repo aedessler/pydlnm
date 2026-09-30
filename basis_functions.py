@@ -6,7 +6,6 @@ lag non-linear models, including linear, polynomial, spline, and specialized fun
 """
 
 import numpy as np
-from sklearn.preprocessing import PolynomialFeatures
 from typing import Union, Optional, List, Tuple, Any, Dict
 import warnings
 
@@ -56,6 +55,58 @@ def _eval_r_spline(r_call: str):
     knots = np.atleast_1d(np.asarray(_r_eval('as.numeric(attr(res, "knots"))'), dtype=float))
     boundary = np.atleast_1d(np.asarray(_r_eval('as.numeric(attr(res, "Boundary.knots"))'), dtype=float))
     return basis, knots, boundary
+
+
+def _as_vector(values) -> np.ndarray:
+    """A 1-d float array from a scalar, a 0-d array, a list/tuple/Series or an array (R: a length-1 numeric is a
+    vector, so a scalar knot / threshold / break is a valid argument)."""
+    return np.atleast_1d(np.asarray(values, dtype=float)).ravel()
+
+
+def _r_spline_basis(fun: str, x, df, knots, degree, intercept, boundary_knots):
+    """``splines::ns()`` (``fun='ns'``) or ``splines::bs()`` (``fun='bs'``) evaluated by R, with R's own defaults.
+
+    ``df`` and ``knots`` are forwarded only when given (R: ``df = NULL, knots = NULL``, i.e. no interior knots when
+    neither is supplied), and so is ``Boundary.knots`` (R: ``range(x)``, or ``x * c(7, 9) / 8`` for a single
+    non-missing x). Returns ``(basis, interior_knots, boundary_knots)`` as used by R.
+    """
+    x = np.asarray(x, dtype=float)
+    with localconverter(robjects.default_converter + numpy2ri.converter):
+        scratch = _r_scratch()
+        scratch['x'] = x
+        args = []
+        if knots is not None:
+            scratch['ik'] = _as_vector(knots)
+            args.append('knots=ik')
+        elif df is not None:
+            args.append(f'df={int(df)}')
+        if fun == 'bs':
+            args.append(f'degree={int(degree)}')
+        args.append(f'intercept={"TRUE" if intercept else "FALSE"}')
+        if boundary_knots is not None:
+            scratch['bk'] = _as_vector(boundary_knots)
+            args.append('Boundary.knots=bk')
+        return _eval_r_spline(f'splines::{fun}(x, {", ".join(args)})')
+
+
+def _r_colon(start, end) -> np.ndarray:
+    """R's ``start:end`` (step +1, or -1 if end < start; the last value never exceeds ``end`` beyond 1e-10)."""
+    n = int(np.floor(abs(end - start) + 1e-10)) + 1
+    return start + (1.0 if start <= end else -1.0) * np.arange(n)
+
+
+def _r_format(values: np.ndarray) -> np.ndarray:
+    """``as.character()`` of doubles as R matches them in ``factor()`` (15 significant digits)."""
+    return np.array([('%.15g' % (v + 0.0)) if not np.isnan(v) else 'NA' for v in values], dtype=object)
+
+
+def _require_r_package(package: str):
+    """Raise ImportError unless the R package can be loaded (used for mgcv, needed by the 'cr' basis)."""
+    if not HAS_RPY2:
+        raise ImportError("rpy2 is required for this basis function in PyDLNM. Please install rpy2 with: pip install rpy2")
+    ok = robjects.r(f'isTRUE(suppressWarnings(requireNamespace("{package}", quietly = TRUE)))')[0]
+    if not ok:
+        raise ImportError(f"the R package '{package}' is required for this basis function but is not installed")
 
 
 class BaseBasisFunction:
@@ -137,16 +188,19 @@ class LinearBasis(BaseBasisFunction):
 
 class PolynomialBasis(BaseBasisFunction):
     """
-    Polynomial basis function.
-    
-    Creates polynomial basis functions of specified degree.
-    
+    Polynomial basis function (R dlnm ``poly()``).
+
+    The columns are ``(x / scale) ** k`` for ``k = (1 - intercept):degree``, exactly as R's
+    ``outer(x/scale, (1-intercept):degree, "^")``: missing values give NaN rows (the intercept column of a missing
+    x stays 1, as ``NaN ^ 0 = 1`` in R), a constant zero x gives ``0 / 0 = NaN``, and ``degree=0`` without intercept
+    is R's ``1:0`` (the columns ``x / scale`` and ``1``).
+
     Parameters
     ----------
     degree : int, default=1
         Polynomial degree
     scale : float, optional
-        Scaling factor. If None, uses max(abs(x))
+        Scaling factor. If None, uses ``max(abs(x))`` over the non-missing values (R: ``na.rm = TRUE``)
     intercept : bool, default=False
         Whether to include an intercept column
     """
@@ -177,29 +231,20 @@ class PolynomialBasis(BaseBasisFunction):
         """
         x = np.asarray(x, dtype=float)
         
-        # Determine scale if not provided
+        # R: if(missing(scale)) scale <- max(abs(x), na.rm=TRUE)  (-Inf for an all-missing x, with a warning)
         if self.scale is None:
-            scale = np.max(np.abs(x))
-            if scale == 0:
-                scale = 1.0
+            observed = np.abs(x[~np.isnan(x)])
+            scale = float(observed.max()) if observed.size else -np.inf
         else:
-            scale = self.scale
+            scale = float(self.scale)
         
         self.attributes['scale'] = scale
         
-        # Scale x
-        x_scaled = x / scale
-        
-        # Generate polynomial features
-        poly_features = PolynomialFeatures(
-            degree=self.degree, 
-            include_bias=self.intercept,
-            interaction_only=False
-        )
-        
-        basis = poly_features.fit_transform(x_scaled.reshape(-1, 1))
-        
-        return basis
+        # R: outer(x/scale, (1-intercept):degree, "^")
+        with np.errstate(divide='ignore', invalid='ignore'):
+            x_scaled = x / scale
+            powers = _r_colon(1 - int(bool(self.intercept)), float(self.degree))
+            return np.power.outer(x_scaled, powers)
 
 
 class SplineBasis(BaseBasisFunction):
@@ -211,28 +256,31 @@ class SplineBasis(BaseBasisFunction):
     
     Parameters
     ----------
-    df : int, default=4
-        Degrees of freedom (number of knots + 1)
-    knots : array-like, optional
-        Interior knot positions. If None, uses quantiles
+    df : int, optional
+        Degrees of freedom. As in R (``df = NULL``) there is no default: with neither ``df`` nor ``knots`` the basis
+        has no interior knots (a single column without intercept). With ``df`` and no ``knots`` the interior knots
+        are placed at quantiles of x (by R).
+    knots : array-like or scalar, optional
+        Interior knot positions. If given, ``df`` is ignored (as in R)
     intercept : bool, default=False
         Whether to include an intercept column
+    Boundary_knots : array-like, optional
+        Boundary knots (R: ``Boundary.knots``). If None, R's default: the range of x (``x * c(7, 9) / 8`` for a
+        single non-missing value).
     """
     
-    def __init__(self, df: int = 4, knots: Optional[np.ndarray] = None,
+    def __init__(self, df: Optional[int] = None, knots: Optional[np.ndarray] = None,
                  intercept: bool = False,
                  Boundary_knots: Optional[np.ndarray] = None, **kwargs):
         super().__init__(df=df, knots=knots, intercept=intercept, **kwargs)
         self.df = df
-        self.knots = knots
+        self.knots = None if knots is None else _as_vector(knots)
         self.intercept = intercept
-        self.Boundary_knots = (np.asarray(Boundary_knots, dtype=float)
-                               if Boundary_knots is not None else None)
+        self.Boundary_knots = None if Boundary_knots is None else _as_vector(Boundary_knots)
         self.attributes['fun'] = 'ns'
-        self.attributes['df'] = df
         self.attributes['intercept'] = intercept
-        if knots is not None:
-            self.attributes['knots'] = np.asarray(knots, dtype=float)
+        if self.knots is not None:
+            self.attributes['knots'] = self.knots
         if self.Boundary_knots is not None:
             self.attributes['Boundary_knots'] = self.Boundary_knots
         self._check_rpy2()
@@ -259,27 +307,12 @@ class SplineBasis(BaseBasisFunction):
         np.ndarray
             Natural spline basis matrix
         """
-        x = np.asarray(x, dtype=float)
-        icpt = "TRUE" if self.intercept else "FALSE"
-
-        # Use R's natural splines for exact compatibility
-        with localconverter(robjects.default_converter + numpy2ri.converter):
-            bk = (self.Boundary_knots if self.Boundary_knots is not None
-                  else np.array([np.nanmin(x), np.nanmax(x)]))
-            scratch = _r_scratch()
-            scratch['x'] = x
-            scratch['bk'] = bk
-            if self.knots is not None:
-                scratch['ik'] = np.asarray(self.knots, dtype=float)
-                r_call = f'splines::ns(x, knots=ik, intercept={icpt}, Boundary.knots=bk)'
-            elif self.df is not None:
-                r_call = f'splines::ns(x, df={int(self.df)}, intercept={icpt}, Boundary.knots=bk)'
-            else:
-                r_call = f'splines::ns(x, df=4, intercept={icpt}, Boundary.knots=bk)'
-            basis_matrix, knots_used, boundary_used = _eval_r_spline(r_call)
+        basis_matrix, knots_used, boundary_used = _r_spline_basis(
+            'ns', x, self.df, self.knots, None, self.intercept, self.Boundary_knots)
 
         # Record the knots R used (R: attributes of the ns object), so that prediction can rebuild this basis
         self.internal_knots = knots_used
+        self.attributes['df'] = basis_matrix.shape[1]
         self.attributes['knots'] = knots_used
         self.attributes['Boundary_knots'] = boundary_used
         return basis_matrix
@@ -294,12 +327,13 @@ class BSplineBasis(BaseBasisFunction):
 
     Parameters
     ----------
-    df : int, default=4
-        Degrees of freedom
+    df : int, optional
+        Degrees of freedom. As in R (``df = NULL``) there is no default: with neither ``df`` nor ``knots`` the basis
+        has no interior knots (``degree`` columns without intercept).
     degree : int, default=3
         B-spline degree
-    knots : array-like, optional
-        Interior knot positions. If None, uses quantiles
+    knots : array-like or scalar, optional
+        Interior knot positions. If given, ``df`` is ignored (as in R)
     intercept : bool, default=False
         Whether to include an intercept column
     Boundary_knots : array-like, optional
@@ -309,7 +343,7 @@ class BSplineBasis(BaseBasisFunction):
         matching R's crossbasis / mkXpred behaviour exactly.
     """
 
-    def __init__(self, df: int = 4, degree: int = 3,
+    def __init__(self, df: Optional[int] = None, degree: int = 3,
                  knots: Optional[np.ndarray] = None,
                  intercept: bool = False,
                  Boundary_knots: Optional[np.ndarray] = None, **kwargs):
@@ -317,12 +351,10 @@ class BSplineBasis(BaseBasisFunction):
                         intercept=intercept, **kwargs)
         self.df = df
         self.degree = degree
-        self.knots = knots
+        self.knots = None if knots is None else _as_vector(knots)
         self.intercept = intercept
-        self.Boundary_knots = (np.asarray(Boundary_knots, dtype=float)
-                               if Boundary_knots is not None else None)
+        self.Boundary_knots = None if Boundary_knots is None else _as_vector(Boundary_knots)
         self.attributes['fun'] = 'bs'
-        self.attributes['df'] = df
         self.attributes['degree'] = degree
         self.attributes['intercept'] = intercept
         if self.Boundary_knots is not None:
@@ -367,33 +399,12 @@ class BSplineBasis(BaseBasisFunction):
         np.ndarray
             B-spline basis matrix
         """
-        x = np.asarray(x, dtype=float)
-        icpt = "TRUE" if self.intercept else "FALSE"
-
-        # Use R's B-splines for exact compatibility.
-        # Pass Boundary.knots so predictions outside the training range use the
-        # same boundary knots as training — matching R's crossbasis/mkXpred.
-        boundary = (self.Boundary_knots if self.Boundary_knots is not None
-                    else np.array([np.nanmin(x), np.nanmax(x)]))
-
-        with localconverter(robjects.default_converter + numpy2ri.converter):
-            scratch = _r_scratch()
-            scratch['x'] = x
-            scratch['bk'] = boundary
-            if self.knots is not None:
-                scratch['ik'] = np.asarray(self.knots, dtype=float)
-                r_call = (f'splines::bs(x, knots=ik, degree={int(self.degree)}, '
-                          f'intercept={icpt}, Boundary.knots=bk)')
-            elif self.df is not None:
-                r_call = (f'splines::bs(x, df={int(self.df)}, degree={int(self.degree)}, '
-                          f'intercept={icpt}, Boundary.knots=bk)')
-            else:
-                r_call = (f'splines::bs(x, df=4, degree={int(self.degree)}, '
-                          f'intercept={icpt}, Boundary.knots=bk)')
-            basis_matrix, knots_used, boundary_used = _eval_r_spline(r_call)
+        basis_matrix, knots_used, boundary_used = _r_spline_basis(
+            'bs', x, self.df, self.knots, self.degree, self.intercept, self.Boundary_knots)
 
         # Record the knots R used (R: attributes of the bs object), so that prediction can rebuild this basis
         self.internal_knots = knots_used
+        self.attributes['df'] = basis_matrix.shape[1]
         self.attributes['knots'] = knots_used
         self.attributes['Boundary_knots'] = boundary_used
         return basis_matrix
@@ -501,30 +512,35 @@ class StrataBasis(BaseBasisFunction):
 
 class ThresholdBasis(BaseBasisFunction):
     """
-    Threshold/hockey-stick basis function.
-    
-    Creates threshold transformations with different sides.
-    
+    Threshold/hockey-stick basis function (R dlnm ``thr()``).
+
+    Creates high, low or double linear threshold transformations.
+
     Parameters
     ----------
     thr_value : float or array-like, optional
-        Threshold value(s). If None, uses median
-    side : str, default='h'
-        Threshold side: 'h' (higher), 'l' (lower), 'd' (double)
+        Threshold value(s). If None, the median of x (R: ``median(x, na.rm = FALSE)``, i.e. NaN, and so an all-NaN
+        basis, when x has missing values). Otherwise the values are sorted (missing ones dropped); only the minimum
+        is used for side 'h'/'l' and the minimum and maximum for side 'd'.
+    side : {'h', 'l', 'd'}, optional
+        Threshold side: 'h' (higher), 'l' (lower), 'd' (double). If None (default) it is 'd' when more than one
+        threshold value is supplied and 'h' otherwise.
     intercept : bool, default=False
         Whether to include an intercept column
     """
     
     def __init__(self, thr_value: Optional[Union[float, np.ndarray]] = None,
-                 side: str = 'h', intercept: bool = False, **kwargs):
+                 side: Optional[str] = None, intercept: bool = False, **kwargs):
+        thr_value = kwargs.pop('thr.value', thr_value)       # R's spelling of the argument
         super().__init__(thr_value=thr_value, side=side, 
                         intercept=intercept, **kwargs)
         self.thr_value = thr_value
         self.side = side
         self.intercept = intercept
         self.attributes['fun'] = 'thr'
-        self.attributes['side'] = side
         self.attributes['intercept'] = intercept
+        if side is not None:
+            self.attributes['side'] = side
     
     def __call__(self, x: np.ndarray, **kwargs) -> np.ndarray:
         """
@@ -541,48 +557,40 @@ class ThresholdBasis(BaseBasisFunction):
             Threshold basis matrix
         """
         x = np.asarray(x, dtype=float)
-        x_clean = x[~np.isnan(x)]
         
-        if len(x_clean) == 0:
-            raise ValueError("No valid (non-NaN) values in x")
-        
-        # Determine threshold value if not provided
+        # R: thr.value <- if(is.null(thr.value)) median(x, na.rm=FALSE) else sort(thr.value)
         if self.thr_value is None:
-            thr = np.median(x_clean)
+            with np.errstate(invalid='ignore'):
+                thr = np.array([np.median(x)]) if x.size else np.array([np.nan])
         else:
-            thr = self.thr_value
+            thr = _as_vector(self.thr_value)
+            thr = np.sort(thr[~np.isnan(thr)])            # sort() drops missing values
         
-        if isinstance(thr, (list, tuple, np.ndarray)):
-            thr = np.asarray(thr)
-        else:
-            thr = np.array([thr])
+        # R: side <- ifelse(length(thr.value) > 1, "d", "h"), then match.arg(side, c("h", "l", "d"))
+        side = self.side
+        if side is None:
+            side = 'd' if len(thr) > 1 else 'h'
+        if side not in ('h', 'l', 'd'):
+            raise ValueError(f"Invalid side '{side}'. Must be 'h', 'l', or 'd'")
+        
+        # R: thr.value[c(1, length)] for 'd', thr.value[1] otherwise (NA if there is none)
+        if len(thr) == 0:
+            thr = np.array([np.nan])
+        thr = thr[[0, -1]] if side == 'd' else thr[:1]
         
         self.attributes['thr.value'] = thr
+        self.attributes['side'] = side
         
-        basis_cols = []
-        
-        if self.side == 'h':
+        # NaN propagates through np.maximum / np.minimum, as through R's pmax / pmin
+        if side == 'h':
             # Higher side: max(x - threshold, 0)
-            for t in thr:
-                basis_cols.append(np.maximum(x - t, 0))
-        elif self.side == 'l':
+            basis_cols = [np.maximum(x - thr[0], 0.0)]
+        elif side == 'l':
             # Lower side: -min(x - threshold, 0)
-            for t in thr:
-                basis_cols.append(-np.minimum(x - t, 0))
-        elif self.side == 'd':
-            # Double side: both higher and lower
-            if len(thr) == 1:
-                # Use single threshold for both sides
-                t = thr[0]
-                basis_cols.append(-np.minimum(x - t, 0))  # Lower side
-                basis_cols.append(np.maximum(x - t, 0))   # Higher side
-            else:
-                # Use two thresholds
-                t1, t2 = thr[0], thr[1] if len(thr) > 1 else thr[0]
-                basis_cols.append(-np.minimum(x - t1, 0))  # Lower side
-                basis_cols.append(np.maximum(x - t2, 0))   # Higher side
+            basis_cols = [-np.minimum(x - thr[0], 0.0)]
         else:
-            raise ValueError(f"Invalid side '{self.side}'. Must be 'h', 'l', or 'd'")
+            # Double side: lower hinge at min(thr), higher hinge at max(thr)
+            basis_cols = [-np.minimum(x - thr[0], 0.0), np.maximum(x - thr[1], 0.0)]
         
         basis = np.column_stack(basis_cols)
         
@@ -590,4 +598,278 @@ class ThresholdBasis(BaseBasisFunction):
             intercept_col = np.ones((len(x), 1))
             basis = np.column_stack([intercept_col, basis])
         
+        return basis
+
+
+class IntegerBasis(BaseBasisFunction):
+    """
+    Integer (indicator) basis function (R dlnm ``integer()``).
+
+    One indicator column per level: ``values`` if given, the sorted distinct values of x otherwise. The first column
+    is dropped unless ``intercept`` is True; with a single level the column is kept and ``intercept`` is forced to
+    True. A missing x, or an x that is not one of ``values``, gives a row of NaN (R's ``NA`` from ``factor()``).
+    Values are matched as R's ``factor()`` does, through their 15-significant-digit text.
+
+    Parameters
+    ----------
+    values : array-like, optional
+        The levels (columns, in this order). Default: ``sorted(unique(x))``
+    intercept : bool, default=False
+        Whether the first level is kept (a full set of indicators)
+    """
+
+    def __init__(self, values: Optional[np.ndarray] = None, intercept: bool = False, **kwargs):
+        super().__init__(values=values, intercept=intercept, **kwargs)
+        self.values = None if values is None else _as_vector(values)
+        self.intercept = bool(intercept)
+        self.attributes['fun'] = 'integer'
+        self.attributes['intercept'] = self.intercept
+
+    def __call__(self, x: np.ndarray, **kwargs) -> np.ndarray:
+        """
+        Generate the indicator matrix exactly as R's integer().
+
+        Parameters
+        ----------
+        x : array-like
+            Input vector
+
+        Returns
+        -------
+        np.ndarray
+            Indicator matrix (NaN rows for missing or unlisted x)
+        """
+        x = np.asarray(x, dtype=float)
+
+        # R: levels <- if(!missing(values)) values else sort(unique(x))   (sort() drops the missing values)
+        levels = self.values if self.values is not None else np.unique(x[~np.isnan(x)])
+        labels = _r_format(levels)
+        if len(set(labels)) != len(labels):
+            raise ValueError("factor level is duplicated in 'values'")
+
+        # R: factor(x, levels) and outer(xfac, levels, "==") + 0L: a row of NA when x is missing / not a level
+        position = {label: j for j, label in enumerate(labels) if label != 'NA'}
+        distinct, inverse = np.unique(x, return_inverse=True)
+        index = np.array([position.get(label, -1) for label in _r_format(distinct)], dtype=int)[inverse.ravel()]
+        basis = (index[:, None] == np.arange(len(levels))[None, :]).astype(float)
+        basis[index < 0] = np.nan
+
+        # R: if(ncol(basis) > 1L) { if(!intercept) drop the first column } else intercept <- TRUE
+        intercept = self.intercept
+        if basis.shape[1] > 1:
+            if not intercept:
+                basis = basis[:, 1:]
+        else:
+            intercept = True
+
+        self.attributes['values'] = levels
+        self.attributes['intercept'] = intercept
+        return basis
+
+
+class PSplineBasis(BaseBasisFunction):
+    """
+    P-spline basis function (R dlnm ``ps()``): B-splines at equally spaced knots with a difference penalty.
+
+    Port of dlnm's ``ps()``; the B-spline design matrix is evaluated by R's ``splines::splineDesign()`` through
+    rpy2. The attributes hold R's ``df``, full knot vector ``knots``, ``degree``, ``intercept``, ``fx``, the penalty
+    matrix ``S`` (None if ``fx``) and ``diff``, which is what ``crosspred`` needs to rebuild the basis at new x.
+
+    Parameters
+    ----------
+    df : int, default=10
+        Degrees of freedom (columns)
+    knots : array-like, optional
+        Either the complete knot vector (then ``df`` is derived from it) or a two-element range that replaces the
+        range of x when the equally spaced knots are placed
+    degree : int, default=3
+        B-spline degree (>= 1)
+    intercept : bool, default=False
+        Whether to keep the first B-spline
+    fx : bool, default=False
+        Fixed (unpenalised) basis: no penalty matrix
+    S : array-like, optional
+        Penalty matrix (default: the ``diff``-th order difference penalty)
+    diff : int, default=2
+        Order of the difference penalty
+    """
+
+    def __init__(self, df: int = 10, knots: Optional[np.ndarray] = None, degree: int = 3,
+                 intercept: bool = False, fx: bool = False, S: Optional[np.ndarray] = None, diff: int = 2,
+                 **kwargs):
+        super().__init__(df=df, knots=knots, degree=degree, intercept=intercept, fx=fx, S=S, diff=diff, **kwargs)
+        self.df = df
+        self.knots = None if knots is None else _as_vector(knots)
+        self.degree = degree
+        self.intercept = bool(intercept)
+        self.fx = bool(fx)
+        self.S = None if S is None else np.atleast_2d(np.asarray(S, dtype=float))
+        self.diff = diff
+        self.attributes['fun'] = 'ps'
+        self._check_rpy2()
+
+    def _check_rpy2(self):
+        """Check if rpy2 is available"""
+        if not HAS_RPY2:
+            raise ImportError(
+                "rpy2 is required for spline functionality in PyDLNM. "
+                "Please install rpy2 with: pip install rpy2"
+            )
+
+    def __call__(self, x: np.ndarray, **kwargs) -> np.ndarray:
+        x = np.asarray(x, dtype=float)
+        observed_range = (np.nanmin(x), np.nanmax(x)) if np.any(~np.isnan(x)) else (np.inf, -np.inf)
+        nax = np.isnan(x)
+        xx = x[~nax]
+        degree = int(self.degree)                                  # R: as.integer(degree)
+        if degree < 1:
+            raise ValueError("'degree' must be integer >= 1")
+        intercept = int(self.intercept)
+        df = self.df
+
+        # DEFINE KNOTS AND DF
+        knots = self.knots
+        if knots is None or len(knots) == 2:
+            nik = int(df) - degree + 2 - intercept
+            if nik <= 1:
+                raise ValueError("basis dimension too small for b-spline degree")
+            width = (observed_range[1] - observed_range[0]) * 0.001
+            xl = (knots.min() if knots is not None else xx.min()) - width
+            xu = (knots.max() if knots is not None else xx.max()) + width
+            dx = (xu - xl) / (nik - 1)
+            knots = np.linspace(xl - dx * degree, xu + dx * degree, nik + 2 * degree)
+        else:
+            df = len(knots) - degree - 2 + intercept
+            if df - degree <= 1:
+                raise ValueError("basis dimension too small for b-spline degree")
+        if np.any((xx < knots[degree]) | (knots[len(knots) - degree - 1] < xx)):
+            warnings.warn('all obs expected within inner df-degree+int knots')
+
+        # TRANSFORMATION: R's splineDesign(knots, x, degree + 1, x * 0, TRUE)
+        with localconverter(robjects.default_converter + numpy2ri.converter):
+            scratch = _r_scratch()
+            scratch['x'] = xx
+            scratch['knots'] = np.asarray(knots, dtype=float)
+            design = np.array(_r_eval(f'unclass(suppressWarnings(splines::splineDesign(knots, x, {degree + 1}, '
+                                      f'x * 0, TRUE)))'))
+        basis = design.reshape(len(xx), -1)
+        if not intercept:
+            basis = basis[:, 1:]
+
+        # RE-INSERT MISSING
+        if nax.any():
+            full = np.full((len(x), basis.shape[1]), np.nan)
+            full[~nax] = basis
+            basis = full
+
+        # RELATED PENALTY MATRIX
+        if self.diff < 1:
+            raise ValueError("'diff' must be an integer >=1")
+        penalty = self.S
+        if self.fx:
+            penalty = None
+        elif penalty is None:
+            difference = np.diff(np.eye(basis.shape[1] + (1 - intercept)), n=int(self.diff), axis=0)
+            penalty = difference.T @ difference
+            penalty = (penalty + penalty.T) / 2
+            if not intercept:
+                penalty = penalty[1:, 1:]
+        elif penalty.shape != (basis.shape[1], basis.shape[1]):
+            raise ValueError("dimensions of 'S' not compatible")
+
+        self.attributes.update({'df': int(df), 'knots': knots, 'degree': degree, 'intercept': self.intercept,
+                                'fx': self.fx, 'S': penalty, 'diff': self.diff})
+        return basis
+
+
+class CRSplineBasis(BaseBasisFunction):
+    """
+    Cubic regression spline basis function (R dlnm ``cr()``), from mgcv.
+
+    Port of dlnm's ``cr()``: the knots are quantiles of the distinct x values, the basis and penalty come from
+    mgcv's ``smooth.construct.cr.smooth.spec()`` (R package mgcv, evaluated through rpy2). The attributes hold R's
+    ``df``, ``knots``, ``intercept``, ``fx`` and the penalty matrix ``S`` (None if ``fx``), which is what
+    ``crosspred`` needs to rebuild the basis at new x.
+
+    Parameters
+    ----------
+    df : int, default=10
+        Degrees of freedom (columns), at least 3
+    knots : array-like, optional
+        The knots (``len(knots) - (not intercept)`` is then the df). Default: ``df + (not intercept)`` quantiles
+        of the distinct values of x, from its minimum to its maximum
+    intercept : bool, default=False
+        Whether to keep the first column
+    fx : bool, default=False
+        Fixed (unpenalised) basis: no penalty matrix
+    S : array-like, optional
+        Penalty matrix (default: mgcv's, symmetrised)
+    """
+
+    def __init__(self, df: int = 10, knots: Optional[np.ndarray] = None, intercept: bool = False,
+                 fx: bool = False, S: Optional[np.ndarray] = None, **kwargs):
+        super().__init__(df=df, knots=knots, intercept=intercept, fx=fx, S=S, **kwargs)
+        self.df = df
+        self.knots = None if knots is None else _as_vector(knots)
+        self.intercept = bool(intercept)
+        self.fx = bool(fx)
+        self.S = None if S is None else np.atleast_2d(np.asarray(S, dtype=float))
+        self.attributes['fun'] = 'cr'
+
+    def __call__(self, x: np.ndarray, **kwargs) -> np.ndarray:
+        _require_r_package('mgcv')
+        x = np.asarray(x, dtype=float)
+        nax = np.isnan(x)
+        xx = x[~nax]
+        not_intercept = int(not self.intercept)
+
+        # DEFINE KNOTS AND DF
+        if self.knots is None:
+            df = int(self.df)
+            if df < 3:
+                raise ValueError("'df' must be >=3")
+            knots = np.quantile(np.unique(xx), np.linspace(0.0, 1.0, df + not_intercept))
+        else:
+            knots = self.knots
+            df = len(knots) - not_intercept
+
+        # CHECK NUMBER OF UNIQUE x VALUES (ADD SOME IF NEEDED TO PREVENT AN ERROR IN mgcv)
+        add = len(np.unique(xx)) < len(knots)
+        if add:
+            xx = np.concatenate([np.linspace(knots.min(), knots.max(), len(knots)), xx])
+
+        # TRANSFORMATION: CALL FUNCTION FROM MGCV
+        with localconverter(robjects.default_converter + numpy2ri.converter):
+            scratch = _r_scratch()
+            scratch['x'] = xx
+            scratch['knots'] = np.asarray(knots, dtype=float)
+            _r_eval(f'oo <- mgcv::smooth.construct.cr.smooth.spec(mgcv::s(x, bs = "cr", k = {df + not_intercept}), '
+                    f'data = list(x = x), knots = list(x = knots))')
+            design = np.array(_r_eval('unclass(oo$X)'))
+            penalty = np.array(_r_eval('unclass(oo$S[[1]])'))
+        basis = design.reshape(len(xx), -1)
+        if not self.intercept:
+            basis = basis[:, 1:]
+
+        # REMOVE ADDED VALUES AND RE-INSERT MISSING
+        if add:
+            basis = basis[len(knots):]
+        if nax.any():
+            full = np.full((len(x), basis.shape[1]), np.nan)
+            full[~nax] = basis
+            basis = full
+
+        # RELATED PENALTY MATRIX
+        result = self.S
+        if self.fx:
+            result = None
+        elif result is None:
+            result = (penalty + penalty.T) / 2
+            if not self.intercept:
+                result = result[1:, 1:]
+        elif result.shape != (basis.shape[1], basis.shape[1]):
+            raise ValueError("dimensions of 'S' not compatible")
+
+        self.attributes.update({'df': int(df), 'knots': knots, 'intercept': self.intercept, 'fx': self.fx,
+                                'S': result})
         return basis
