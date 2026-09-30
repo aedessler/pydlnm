@@ -106,7 +106,8 @@ def find_mmt(basis: CrossBasis,
              from_val: Optional[float] = None,
              to_val: Optional[float] = None,
              by: Optional[float] = None,
-             method: str = "overall") -> Dict:
+             method: str = "overall",
+             name: Optional[str] = None) -> Dict:
     """
     Find minimum mortality temperature (MMT) or minimum risk exposure
     
@@ -132,6 +133,9 @@ def find_mmt(basis: CrossBasis,
         Method for MMT calculation: "overall" searches the overall (summed over lags) effect; "lagspecific"
         searches the lag-specific effect at the first lag of the prediction lag range (``basis.lag[0]``, column 0
         of ``matfit``; lag 0 for the usual lag range starting at 0)
+    name : str, optional
+        Name of the cross-basis in ``model``: prefix of the coefficient names of its terms (R: the name of the
+        basis object); selects its block in a model that holds several cross-bases (see ``crosspred``)
         
     Returns:
     --------
@@ -156,7 +160,8 @@ def find_mmt(basis: CrossBasis,
             from_val=from_val,
             to_val=to_val,
             by=by,
-            cen=False  # No centering for MMT search (R: cen=FALSE)
+            cen=False,  # No centering for MMT search (R: cen=FALSE)
+            name=name
         )
     except Exception as e:
         raise ValueError(f"Error creating prediction object: {e}")
@@ -284,7 +289,8 @@ def recenter_basis(basis: CrossBasis,
 def compare_centering(basis: CrossBasis,
                       model: Any,
                       centering_values: Union[List[float], np.ndarray],
-                      at: Optional[np.ndarray] = None) -> Dict:
+                      at: Optional[np.ndarray] = None,
+                      name: Optional[str] = None) -> Dict:
     """
     Compare effects under different centering approaches
     
@@ -298,6 +304,8 @@ def compare_centering(basis: CrossBasis,
         List of centering values to compare
     at : array-like, optional
         Prediction values
+    name : str, optional
+        Name of the cross-basis in ``model`` (see ``crosspred``)
         
     Returns:
     --------
@@ -313,7 +321,8 @@ def compare_centering(basis: CrossBasis,
                 basis=basis,
                 model=model,
                 cen=cen_val,
-                at=at
+                at=at,
+                name=name
             )
             
             # Store key results (repeated centering values keep one record each)
@@ -354,7 +363,7 @@ class CenteringManager:
     Utility class for managing centering operations in DLNM analysis
     """
     
-    def __init__(self, basis: CrossBasis, model: Any):
+    def __init__(self, basis: CrossBasis, model: Any, name: Optional[str] = None):
         """
         Initialize centering manager
         
@@ -364,9 +373,12 @@ class CenteringManager:
             Cross-basis object
         model : fitted model object
             Fitted statistical model
+        name : str, optional
+            Name of the cross-basis in ``model`` (see ``crosspred``)
         """
         self.basis = basis
         self.model = model
+        self.name = name
         self._mmt_cache = {}
         self._centering_history = []
     
@@ -381,9 +393,14 @@ class CenteringManager:
             return tuple(sorted((k, CenteringManager._freeze(v)) for k, v in value.items()))
         return value
     
+    def _with_name(self, kwargs: Dict) -> Dict:
+        """Arguments with the name of the cross-basis of the manager (unless given)."""
+        return kwargs if self.name is None else {'name': self.name, **kwargs}
+    
     def find_mmt(self, **kwargs) -> Dict:
         """Find MMT, cached per (arguments, model, basis): a call with other arguments, or after the model or
         the basis of the manager was replaced, is computed afresh."""
+        kwargs = self._with_name(kwargs)
         key = self._freeze(kwargs)
         entry = self._mmt_cache.get(key)
         if entry is None or entry[0] is not self.basis or entry[1] is not self.model:
@@ -393,7 +410,7 @@ class CenteringManager:
     
     def recenter_at_mmt(self, **kwargs) -> Tuple[CrossBasis, Dict]:
         """Convenience method to recenter at MMT (recorded in the history like recenter_at_value)"""
-        result = recenter_basis(self.basis, self.model, cen=None, find_mmt_args=kwargs)
+        result = recenter_basis(self.basis, self.model, cen=None, find_mmt_args=self._with_name(kwargs))
         self._centering_history.append({
             'method': 'mmt',
             'value': result[1]['value'],
@@ -476,7 +493,7 @@ class CenteringManager:
         
         # Compare centering approaches
         comparison = compare_centering(self.basis, self.model, 
-                                     centering_values, **kwargs)
+                                     centering_values, **self._with_name(kwargs))
         
         # Add strategy names to results
         comparison['strategy_names'] = strategy_names

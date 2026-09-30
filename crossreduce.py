@@ -118,7 +118,8 @@ def crossreduce(basis: Union[CrossBasis, DLNMGLMInterface],
                 bylag: float = 1.0,
                 cen: Optional[float] = None,
                 ci_level: float = 0.95,
-                reduction_type: Optional[str] = None) -> CrossReduce:
+                reduction_type: Optional[str] = None,
+                name: Optional[str] = None) -> CrossReduce:
     """
     Reduce a cross-basis (port of R's ``dlnm::crossreduce()``).
     
@@ -130,7 +131,8 @@ def crossreduce(basis: Union[CrossBasis, DLNMGLMInterface],
     basis : CrossBasis or DLNMGLMInterface
         Cross-basis object (or a fitted GLM interface)
     model : Any, optional
-        Fitted model; the cross-basis coefficients are selected by name (``v1.l1`` ...)
+        Fitted model; the cross-basis coefficients are selected as in ``crosspred``: by ``name``, else by the
+        columns of the cross-basis among the design columns of the model, else by the names ``v1.l1`` ...
     type : {"overall", "var", "lag"}, default "overall"
         Reduction type: the overall cumulative exposure-response ("overall"), the lag-response at the exposure
         ``value`` ("var"), or the exposure-response at the lag ``value`` ("lag")
@@ -139,7 +141,8 @@ def crossreduce(basis: Union[CrossBasis, DLNMGLMInterface],
     coef, vcov : array-like, optional
         Coefficients and covariance of the cross-basis when ``model`` is not given
     model_link : str, optional
-        Link function ("log" and "logit" give relative risks) when ``model`` is not given
+        Link function ("log" and "logit" give relative risks): needed when ``model`` is not given, and it takes
+        precedence over the link inferred from ``model``
     at, from_val, to_val, by : optional
         Exposure values of the predictions (R's at/from/to/by; default ``pretty(range, n=50)``)
     lag : int or tuple, optional
@@ -152,6 +155,9 @@ def crossreduce(basis: Union[CrossBasis, DLNMGLMInterface],
         Confidence level
     reduction_type : str, optional
         Deprecated alias of ``type``
+    name : str, optional
+        Name of the cross-basis in ``model``: prefix of the coefficient names of its terms (R: the name of the
+        basis object, ``deparse(substitute(basis))``); selects its block in a model that holds several cross-bases
         
     Returns
     -------
@@ -191,10 +197,11 @@ def crossreduce(basis: Union[CrossBasis, DLNMGLMInterface],
         
         if model is not None:
             # Cross-basis coefficients selected by name, link from the model
-            info = validate_model_compatibility(model, cb_obj.shape[1], "CrossBasis", kind="cb")
+            info = validate_model_compatibility(model, cb_obj.shape[1], name or "CrossBasis", kind="cb",
+                                                basis=cb_obj, name=name, model_link=model_link)
             cb_coef, cb_vcov = info['coef'], info['vcov']
             model_info = {'type': info['class']}
-            model_link = getlink(model, info['class'], model_link)
+            model_link = info['link']                 # R's getlink(model, class): the user's link first
             
         elif coef is not None and vcov is not None:
             # Direct coefficient and variance-covariance input

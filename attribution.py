@@ -37,10 +37,13 @@ def _match_arg(value: Any, choices: Tuple[str, ...], name: str) -> str:
     raise ValueError(f"'{name}' should be one of {', '.join(repr(c) for c in choices)}")
 
 
-def _resolve_coef_vcov(basis: CrossBasis, model: Optional[Any], coef, vcov) -> Tuple[np.ndarray, np.ndarray]:
-    """Coefficients/vcov of the cross-basis: from the model (selected by name, log or logit link required) or given."""
+def _resolve_coef_vcov(basis: CrossBasis, model: Optional[Any], coef, vcov,
+                       name: Optional[str] = None) -> Tuple[np.ndarray, np.ndarray]:
+    """Coefficients/vcov of the cross-basis: from the model (its block by ``name`` or by its columns, log or logit
+    link required) or given."""
     if model is not None:
-        info = validate_model_compatibility(model, basis.shape[1], "CrossBasis", kind="cb")
+        info = validate_model_compatibility(model, basis.shape[1], name or "CrossBasis", kind="cb",
+                                            basis=basis, name=name)
         if info['link'] not in ('log', 'logit'):
             raise ValueError("'model' must have a log or logit link function")
         return info['coef'], info['vcov']
@@ -73,7 +76,8 @@ def attrdl(x: np.ndarray,
            range: Optional[Tuple[float, float]] = None,
            sim: bool = False,
            nsim: int = 5000,
-           sub: Optional[np.ndarray] = None) -> Dict:
+           sub: Optional[np.ndarray] = None,
+           name: Optional[str] = None) -> Dict:
     """
     Attributable numbers and fractions from a distributed lag model (port of R's ``attrdl``).
 
@@ -86,7 +90,9 @@ def attrdl(x: np.ndarray,
     cases : array-like
         Cases series, or (only ``dir='forw'``) the matrix of future cases.
     model : fitted model, optional
-        Its cross-basis coefficients are selected by name; the link must be log or logit.
+        Its cross-basis coefficients are selected as in ``crosspred`` (by ``name``, else by the columns of the
+        cross-basis among the design columns of the model, else by the names ``v1.l1`` ...); the link must be log
+        or logit (inferred as R's getlink does, including Cox, conditional logit and conditional Poisson models).
     coef, vcov : array-like, optional
         Coefficients and covariance of the basis when ``model`` is not given (log scale). Fewer coefficients
         than basis columns are the reduced (overall-effect) coefficients; only ``dir='forw'`` is possible then.
@@ -106,6 +112,9 @@ def attrdl(x: np.ndarray,
         Number of simulations.
     sub : array-like of bool, optional
         Observations to keep (applied to ``x`` and ``cases`` before the lags are built).
+    name : str, optional
+        Name of the cross-basis in ``model``: prefix of the coefficient names of its terms (R: the name of the
+        basis object); selects its block in a model that holds several cross-bases.
 
     Returns
     -------
@@ -164,7 +173,7 @@ def attrdl(x: np.ndarray,
                 cases = lagmatrix(cases, -lags).mean(axis=1)
 
     # Coefficients and the design matrix summed over the lags
-    coef_vec, vcov_mat = _resolve_coef_vcov(basis, model, coef, vcov)
+    coef_vec, vcov_mat = _resolve_coef_vcov(basis, model, coef, vcov, name)
     reduced = len(coef_vec) != basis.shape[1]
     if reduced:
         if dir == "back":
@@ -236,12 +245,12 @@ def _simulate_totals(x_all: np.ndarray, cases: np.ndarray, den: float, coef: np.
     return {'af_total': af_sim, 'an_total': af_sim * den}
 
 
-def _resolve_wrapper_cen(cen, basis, model, coef, vcov) -> float:
+def _resolve_wrapper_cen(cen, basis, model, coef, vcov, name=None) -> float:
     """Centering of the wrappers: given, stored in the basis, else the minimum-risk exposure (MMT)."""
     if cen is None:
         cen = basis.argvar.get('cen')
     if cen is None:
-        cen = find_mmt(basis, model, coef=coef, vcov=vcov)['mmt']
+        cen = find_mmt(basis, model, coef=coef, vcov=vcov, name=name)['mmt']
     return float(cen)
 
 
@@ -255,18 +264,20 @@ def attr_heat_cold(x: np.ndarray,
                    cen: Optional[float] = None,
                    sim: bool = False,
                    nsim: int = 5000,
-                   split: str = "cen") -> Dict:
+                   split: str = "cen",
+                   name: Optional[str] = None) -> Dict:
     """
     Heat and cold attributable risks.
 
     With ``split='cen'`` (default) cold is the exposure below the centering value and heat the exposure above it
     (R's ``range=c(-Inf, cen)`` and ``range=c(cen, Inf)``), so that cold + heat is the total. With
     ``split='percentile'`` they are the tails below/above the ``percentiles`` of ``x`` (computed ignoring NaN).
-    ``cen`` defaults to the value stored in the basis, else the minimum-risk exposure.
+    ``cen`` defaults to the value stored in the basis, else the minimum-risk exposure. ``name`` is the name of the
+    cross-basis in ``model`` (see ``attrdl``).
     """
     split = _match_arg(split, ("cen", "percentile"), "split")
     x = np.asarray(x, dtype=float)
-    cen = _resolve_wrapper_cen(cen, basis, model, coef, vcov)
+    cen = _resolve_wrapper_cen(cen, basis, model, coef, vcov, name)
 
     if split == "cen":
         cold_threshold = heat_threshold = cen
@@ -274,9 +285,9 @@ def attr_heat_cold(x: np.ndarray,
         cold_threshold, heat_threshold = np.nanpercentile(x, percentiles)
 
     cold_results = attrdl(x, basis, cases, model, coef, vcov, type="both",
-                          range=(-np.inf, cold_threshold), cen=cen, sim=sim, nsim=nsim)
+                          range=(-np.inf, cold_threshold), cen=cen, sim=sim, nsim=nsim, name=name)
     heat_results = attrdl(x, basis, cases, model, coef, vcov, type="both",
-                          range=(heat_threshold, np.inf), cen=cen, sim=sim, nsim=nsim)
+                          range=(heat_threshold, np.inf), cen=cen, sim=sim, nsim=nsim, name=name)
 
     return {
         'cold': {'threshold': cold_threshold, 'percentile': percentiles[0] if split == "percentile" else None,
@@ -309,26 +320,28 @@ def attr_by_percentiles(x: np.ndarray,
                         percentile_ranges: List[Tuple[float, float]] = None,
                         cen: Optional[float] = None,
                         sim: bool = False,
-                        nsim: int = 5000) -> Dict:
+                        nsim: int = 5000,
+                        name: Optional[str] = None) -> Dict:
     """
     Attributable risks by percentile bins of the exposure.
 
     Each bin is ``[p_low, p_high)`` of the percentiles of ``x`` (computed ignoring NaN), closed on the right for
     a bin ending at the 100th percentile, so that contiguous bins count every observation once.
-    ``cen`` defaults to the value stored in the basis, else the minimum-risk exposure.
+    ``cen`` defaults to the value stored in the basis, else the minimum-risk exposure. ``name`` is the name of the
+    cross-basis in ``model`` (see ``attrdl``).
     """
     if percentile_ranges is None:
         percentile_ranges = [(0, 1), (1, 5), (5, 10), (90, 95), (95, 99), (99, 100)]
 
     x = np.asarray(x, dtype=float)
-    cen = _resolve_wrapper_cen(cen, basis, model, coef, vcov)
+    cen = _resolve_wrapper_cen(cen, basis, model, coef, vcov, name)
     results = {}
 
     for low_pct, high_pct in percentile_ranges:
         low_threshold, high_threshold = np.nanpercentile(x, [low_pct, high_pct])
         upper = high_threshold if high_pct >= 100 else np.nextafter(high_threshold, -np.inf)
         range_results = attrdl(x, basis, cases, model, coef, vcov, type="both",
-                               range=(low_threshold, upper), cen=cen, sim=sim, nsim=nsim)
+                               range=(low_threshold, upper), cen=cen, sim=sim, nsim=nsim, name=name)
         results[f"pct_{low_pct}_{high_pct}"] = {
             'percentiles': (low_pct, high_pct),
             'thresholds': (low_threshold, high_threshold),
@@ -364,14 +377,15 @@ class AttributionManager:
 
     def __init__(self, x: np.ndarray, basis: CrossBasis, cases: np.ndarray,
                  model: Optional[Any] = None, coef: Optional[np.ndarray] = None,
-                 vcov: Optional[np.ndarray] = None):
-        """Initialize attribution manager"""
+                 vcov: Optional[np.ndarray] = None, name: Optional[str] = None):
+        """Initialize attribution manager (``name``: name of the cross-basis in ``model``, see ``attrdl``)"""
         self.x = np.asarray(x)
         self.basis = basis
         self.cases = np.asarray(cases)
         self.model = model
         self.coef = coef
         self.vcov = vcov
+        self.name = name
 
         # Cache for results
         self._mmt_cache = None
@@ -380,22 +394,25 @@ class AttributionManager:
     def get_mmt(self) -> float:
         """Get MMT with caching"""
         if self._mmt_cache is None:
-            mmt_result = find_mmt(self.basis, self.model, coef=self.coef, vcov=self.vcov)
+            mmt_result = find_mmt(self.basis, self.model, coef=self.coef, vcov=self.vcov, name=self.name)
             self._mmt_cache = mmt_result['mmt']
         return self._mmt_cache
 
     def total_attribution(self, **kwargs) -> Dict:
         """Calculate total attributable risk"""
+        kwargs.setdefault('name', self.name)
         return attrdl(self.x, self.basis, self.cases,
                      self.model, self.coef, self.vcov, **kwargs)
 
     def heat_cold_attribution(self, **kwargs) -> Dict:
         """Calculate heat and cold attribution"""
+        kwargs.setdefault('name', self.name)
         return attr_heat_cold(self.x, self.basis, self.cases,
                              self.model, self.coef, self.vcov, **kwargs)
 
     def percentile_attribution(self, **kwargs) -> Dict:
         """Calculate attribution by percentiles"""
+        kwargs.setdefault('name', self.name)
         return attr_by_percentiles(self.x, self.basis, self.cases,
                                   self.model, self.coef, self.vcov, **kwargs)
 

@@ -36,7 +36,12 @@ in the coefficients, statsmodels' numerical Hessians 1e-6 in the vcov), so the t
     link R infers and produce R's output on top of it?
   * END-TO-END tests (rtol 1e-5): R on the R model object versus PyDLNM on the statsmodels model object.
 The neighbouring behaviour that already works (explicit model_link=, the coef=/vcov= route of attrdl) is covered by
-plain tests; tests that assert R's behaviour and fail today carry @known_defect.
+plain tests.
+
+Fixed (was a known defect; every test below is now an ordinary test): model_utils.getlink() infers the link of
+statsmodels PHReg ('log'), ConditionalLogit ('logit'), ConditionalPoisson ('log') and OLS/WLS/GLS ('identity') like R's
+getlink does for coxph / clogit / glm / lm, and a user-supplied model_link takes precedence over the inferred one in
+CrossPred (R: getlink returns model.link first).
 """
 import contextlib
 import io
@@ -49,10 +54,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from rhelpers import assert_close, chicago, known_defect, np2r, r, rget
+from rhelpers import assert_close, chicago, np2r, r, rget
 
 REPO = Path(__file__).resolve().parents[1]
-GAP, KEY = 'GAP', 'cox_clogit_link_not_inferred'
 EXACT = 1e-9          # identical arithmetic on identical numbers (agrees to ~1e-15)
 E2E = 1e-5            # statsmodels fit vs R fit of the same model (optimiser / numerical Hessian precision)
 KINDS = ('cox', 'clogit', 'condpois')              # models that have an R counterpart fitted on the same data
@@ -287,27 +291,15 @@ def _get_ds(kind):
     return _DS[kind]
 
 
-LINK_NOTE = ('getlink() has no rule for statsmodels PHReg / ConditionalLogit / ConditionalPoisson (returns None): '
-             'no RR fields in crosspred/crossreduce, attrdl(model=) raises')
-
-
-def _mark_link_defect(request, kind):
-    """The models whose link PyDLNM cannot infer carry the known-defect mark (R infers it). Applied per test
-    invocation (pytest.param cannot carry the no-op mark that known_defect() returns when PYDLNM_XFAIL_OFF is set)."""
-    if kind != 'negbin':
-        request.applymarker(known_defect(GAP, KEY, note=LINK_NOTE))
-
-
 @pytest.fixture(scope='module', params=ALL_KINDS)
 def ds(request):
-    """Every design, unmarked: for behaviour that already works (name selection, explicit model_link, coef= route)."""
+    """Every design (module scoped): name selection, explicit model_link, coef= route."""
     return _get_ds(request.param)
 
 
 @pytest.fixture(params=ALL_KINDS)
 def ds_link(request):
-    """Every design, for tests that need the link inferred from the model object (negbin already works)."""
-    _mark_link_defect(request, request.param)
+    """Every design, for tests that need the link inferred from the model object."""
     return _get_ds(request.param)
 
 
@@ -315,7 +307,6 @@ def ds_link(request):
 def ds_e2e(request):
     """Link-inference tests against R's own model fit: the designs whose R model has the same vcov as the
     statsmodels fit (not negbin, see the module docstring)."""
-    _mark_link_defect(request, request.param)
     return _get_ds(request.param)
 
 
@@ -607,8 +598,6 @@ def _g():
     return _G['d']
 
 
-@known_defect(GAP, KEY, note='CrossPred ignores a user model_link when the model object has an inferred link: '
-                             'prediction.py `model_info["link"] or model_link`; R getlink returns model.link first')
 def test_crosspred_user_model_link_overrides_inferred_link_like_R():
     """R: crosspred(cb, glm_gaussian, model.link="log") -> model.link "log" with RR fields (a model of log(y) whose
     coefficients are log-RR). PyDLNM keeps the inferred 'identity' (crossreduce honours the user's link)."""
@@ -638,12 +627,32 @@ def test_crosspred_user_model_link_with_model_without_inferred_link_is_faithful(
     assert_close(_pyfield(pp, 'allRRlow'), _rfield(f'{P}g_p2', 'allRRlow'), rtol=E2E, what='allRRlow')
 
 
-@known_defect(GAP, KEY, note='cosmetic: getlink returns None for statsmodels OLS results (class RegressionResultsWrapper); '
-                             'R: lm -> "identity". Numbers are unaffected (linear-scale low/high either way)')
 def test_getlink_ols_is_identity_like_R():
     from model_utils import getlink
     g = _g()
     assert getlink(g.ols) == _rstr(f'dlnm:::getlink({P}g_lm, class({P}g_lm))') == 'identity'
+
+
+def test_getlink_weighted_least_squares_is_identity_like_R():
+    """R: lm(weights=) has class "lm" -> "identity"; statsmodels WLS (same model class family as OLS) agrees, and
+    crosspred on it returns the linear-scale fields only, equal to R's."""
+    import statsmodels.api as sm
+    from model_utils import getlink
+    from prediction import crosspred
+    g = _g()
+    X, y = np.asarray(g.ols.model.exog), np.asarray(g.ols.model.endog)
+    ok = ~np.isnan(g.cb.basis).any(axis=1)                              # rows kept by the fits (R: na.omit)
+    w = np.linspace(0.5, 1.5, len(ok))
+    with _quiet():
+        wls = sm.WLS(y, pd.DataFrame(X, columns=g.ols.model.exog_names), weights=w[ok]).fit()
+    np2r(f'{P}g_w', w)
+    r(f'{P}g_lmw <- lm({P}g_y ~ {P}g_cb, weights={P}g_w)')
+    assert getlink(wls) == _rstr(f'dlnm:::getlink({P}g_lmw, class({P}g_lmw))') == 'identity'
+    with _quiet():
+        pp = crosspred(g.cb, model=wls, at=np.array([0.0, 10.0, 20.0]), cen=15.0)
+    r(f'{P}g_p4 <- crosspred({P}g_cb, {P}g_lmw, at=c(0,10,20), cen=15)')
+    assert pp.model_link == 'identity' and getattr(pp, 'allRRfit', None) is None
+    assert_close(_pyfield(pp, 'alllow'), _rfield(f'{P}g_p4', 'alllow'), rtol=E2E, what='alllow')
 
 
 def test_linear_model_crosspred_has_no_RR_fields_like_R():
@@ -666,11 +675,10 @@ TS_KINDS = ('clogit', 'condpois', 'negbin')
 
 
 @pytest.mark.parametrize('kind', TS_KINDS)
-def test_attr_heat_cold_with_model_matches_R(request, kind):
+def test_attr_heat_cold_with_model_matches_R(kind):
     """attr_heat_cold(model=) = R attrdl(range=c(-Inf, cen)) for cold and attrdl(range=c(cen, Inf)) for heat (forward
     perspective, total AN / AF)."""
     from attribution import attr_heat_cold
-    _mark_link_defect(request, kind)
     ds = _get_ds(kind)
     _load_r_attrdl()
     np2r(f'{P}{kind}_attr_x', ds.exposure)

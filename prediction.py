@@ -126,7 +126,8 @@ class CrossPred:
     vcov : array-like, optional
         Variance-covariance matrix (if model not provided)
     model_link : str, optional
-        Link function name
+        Link function name; takes precedence over the link inferred from ``model`` (R: ``getlink(model, class,
+        model.link)`` returns ``model.link`` when given)
     at : array-like, optional
         Values at which to make predictions
     from_val : float, optional
@@ -145,6 +146,13 @@ class CrossPred:
         Confidence interval level
     cumul : bool, default=False
         Whether to compute cumulative effects
+    name : str, optional
+        Name of the basis in ``model``: the prefix of the coefficient names of its terms (R: the name of the basis
+        object, ``deparse(substitute(basis))``, which Python cannot see). Select the block of one basis in a
+        model that holds several (R: ``crosspred(cb.temp, model)`` versus ``crosspred(cb.o3, model)``). Default:
+        the ``name`` attribute of the basis if it has one, else the basis is found among the design columns of the
+        model (statsmodels results) or of a PyDLNM GLM interface by its values, else by the coefficient names
+        ``v1.l1`` / ``b1``. Not used with ``coef``/``vcov``.
         
     Attributes
     ----------
@@ -186,11 +194,12 @@ class CrossPred:
                  bylag: float = 1.0,
                  cen: Optional[float] = None,
                  ci_level: float = 0.95,
-                 cumul: bool = False):
+                 cumul: bool = False,
+                 name: Optional[str] = None):
         
         # Determine basis type
         self.basis_type = self._determine_basis_type(basis)
-        self.basis_name = getattr(basis, '__name__', str(basis))
+        self.basis_name = name or getattr(basis, '__name__', None) or type(basis).__name__    # label of error messages
         
         # Store basis
         if isinstance(basis, str):
@@ -208,10 +217,12 @@ class CrossPred:
         
         # Extract model information
         if model is not None:
-            model_info = validate_model_compatibility(model, basis.shape[1], self.basis_name, kind=self.basis_type)
+            # R: the block of the basis in the model, and getlink(model, class, model.link) (the user's link first)
+            model_info = validate_model_compatibility(model, basis.shape[1], self.basis_name, kind=self.basis_type,
+                                                      basis=basis, name=name, model_link=model_link)
             self.coefficients = model_info['coef']
             self.vcov = model_info['vcov']
-            self.model_link = model_info['link'] or model_link
+            self.model_link = model_info['link']
             self.model_class = model_info['class']
             if np.isnan(self.coefficients).any() or np.isnan(self.vcov).any():
                 raise ValueError("coef/vcov not consistent with basis matrix. See help(crosspred) "
@@ -509,6 +520,7 @@ def crosspred(basis: Union[OneBasis, CrossBasis],
               cen: Optional[float] = None,
               ci_level: float = 0.95,
               cumul: bool = False,
+              name: Optional[str] = None,
               **kwargs) -> CrossPred:
     """
     Create cross-predictions from distributed lag models.
@@ -541,6 +553,9 @@ def crosspred(basis: Union[OneBasis, CrossBasis],
         Confidence interval level
     cumul : bool, default=False
         Whether to compute cumulative effects
+    name : str, optional
+        Name of the basis in ``model`` (prefix of the coefficient names of its terms, R's ``deparse(substitute(basis))``)
+        to select its block in a model that holds several bases; see ``CrossPred``
     **kwargs
         Additional arguments passed to CrossPred
         
@@ -581,6 +596,7 @@ def crosspred(basis: Union[OneBasis, CrossBasis],
         cen=cen,
         ci_level=ci_level,
         cumul=cumul,
+        name=name,
         **kwargs
     )
     
