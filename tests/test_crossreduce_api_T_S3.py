@@ -212,7 +212,6 @@ RR_FIELDS = ('RRfit', 'RRlow', 'RRhigh')
 # ==============================================================================================================
 # Theme T / crossreduce-5: type="overall" outputs (fit, se, RR, CI, basis, predvar) of R's crossreduce
 # ==============================================================================================================
-@known_defect('T', 'crossreduce-5', note='no at/model_link; result has no basis/predvar/fit/se')
 def test_overall_reduced_basis_fit_and_se_match_r():
     """R: newbasis = onebasis(at) - onebasis(cen), fit = newbasis newcoef, se = sqrt(rowSums((newbasis newvcov) newbasis))."""
     ref = r_reduce('crapi_ov', at=AT, cen=CEN)
@@ -222,7 +221,6 @@ def test_overall_reduced_basis_fit_and_se_match_r():
     assert_close(py_field(red, 'lag'), r_field(ref, 'lag'), what='lag')
 
 
-@known_defect('T', 'crossreduce-5', note='no RRfit/RRlow/RRhigh')
 def test_overall_rr_and_ci_match_r():
     ref = r_reduce('crapi_rr', at=AT, cen=CEN)
     require_outputs(py_reduce(cen=CEN), *RR_FIELDS)
@@ -248,7 +246,6 @@ def test_reduced_coef_through_onebasis_reproduces_r_fit_and_se():
     assert_close(se, r_field(ref, 'se'), rtol=RTOL, what='se')
 
 
-@known_defect('T', 'crossreduce-5', note='default prediction grid (R mkat) / fit not available')
 def test_overall_default_prediction_grid_matches_r():
     """at omitted: R mkat() gives pretty(range, n=50) inside the observed range; fit/se follow on that grid."""
     ref = r_reduce('crapi_dflt', cen=CEN)
@@ -256,7 +253,6 @@ def test_overall_default_prediction_grid_matches_r():
     assert_fields(red, ref, ('predvar', 'fit', 'se', 'RRfit'), what='default grid')
 
 
-@known_defect('T', 'crossreduce-5', note="type='var' raises ValueError / value= not accepted")
 def test_var_reduction_matches_r():
     """type='var': lag-response at a fixed exposure value; M = (onebasis(value) - onebasis(cen)) (x) I."""
     ref = r_reduce('crapi_var', typ='var', value=10.0, cen=CEN)
@@ -267,7 +263,6 @@ def test_var_reduction_matches_r():
     assert str(py_field_type(red)) == 'var'
 
 
-@known_defect('T', 'crossreduce-5', note="type='lag' raises ValueError / value= not accepted")
 def test_lag_reduction_matches_r():
     """type='lag': exposure-response at a fixed lag; M = I (x) onebasis_lag(value)."""
     ref = r_reduce('crapi_lag', typ='lag', value=3.0, cen=CEN, at=AT)
@@ -281,7 +276,6 @@ def test_lag_reduction_matches_r():
     ('var', 10.0, (0, 10), 2),
     ('var', 10.0, (3, 12), 3),
 ], ids=['overall_lag2_10', 'var_lag0_10_by2', 'var_lag3_12_by3'])
-@known_defect('T', 'crossreduce-5', note='lag sub-period / bylag not accepted')
 def test_lag_subperiod_and_bylag_match_r(typ, value, lag, bylag):
     """R: overall sums the lag basis over seqlag(lag); type='var' evaluates the lag basis at seqlag(lag, bylag)."""
     ref = r_reduce('crapi_sub', typ=typ, value=value, lag=lag, bylag=bylag, cen=CEN, at=AT)
@@ -296,7 +290,6 @@ def test_lag_subperiod_and_bylag_match_r(typ, value, lag, bylag):
     ('logit', 0.99, ('RRfit', 'RRlow', 'RRhigh'), ()),
     ('identity', 0.95, ('low', 'high'), ('RRfit', 'RRlow', 'RRhigh')),
 ], ids=['log_90', 'logit_99', 'identity_95'])
-@known_defect('T', 'crossreduce-5', note='model_link / ci_level not accepted; no RR/CI outputs')
 def test_link_and_ci_level_select_the_confidence_interval_like_r(link, ci_level, fields, absent):
     """R: exp() of fit -/+ qnorm(1-(1-ci.level)/2) se for the log/logit links, plain low/high otherwise (an RR of an
     identity-link fit would be meaningless, so R reports none)."""
@@ -322,7 +315,6 @@ def _documented(func):
     return list(out), out
 
 
-@known_defect('T', 'crossreduce-5', note="docstring documents `type`; the parameter is `reduction_type`")
 def test_documented_parameters_exist_in_the_signature():
     """Either fix of the finding (implement `type` or correct the docstring) makes the documentation and the signature agree."""
     from crossreduce import crossreduce
@@ -332,7 +324,6 @@ def test_documented_parameters_exist_in_the_signature():
     assert not missing, f'documented but not accepted: {missing}; signature: {sorted(params)}'
 
 
-@known_defect('T', 'crossreduce-5', note="docstring advertises type 'overall'/'var'/'lag'; var and lag raise ValueError")
 def test_every_documented_reduction_type_is_implemented():
     """Whatever reduction types the docstring names must actually run (R: overall, var, lag)."""
     from crossreduce import crossreduce
@@ -404,7 +395,6 @@ def _assert_cen(ref, red, what):
 @pytest.mark.parametrize('fun, cen', [('bs2', None), ('ns', None), ('ns', True), ('ns', False), ('thr', True),
                                       ('lin', True), ('strata', False)],
                          ids=['bs2-unset', 'ns-unset', 'ns-True', 'ns-False', 'thr-True', 'lin-True', 'strata-False'])
-@known_defect('T', 'crossreduce-6', note='cen is stored raw: unset stays None, TRUE/FALSE are not resolved (R mkcen)')
 def test_resolved_centring_value_matches_r_mkcen(fun, cen, series):
     """cen unset/TRUE -> median(pretty(range)) for bs/ns/poly, FALSE -> NULL; logical cen is dropped for thr/lin/strata."""
     ref, red = _cen_case(fun, series, cen)
@@ -420,7 +410,6 @@ def test_functions_without_default_centring_keep_cen_none(fun, series):
     _assert_cen(ref, red, f'{fun} on {series}')
 
 
-@known_defect('T', 'crossreduce-6', 'centering-19', note='fit/se/RR are not computed, so no centring at the automatic cen')
 def test_unset_cen_centres_the_reduced_fit_at_the_automatic_value():
     """R centres the Chicago bs reduction at mkcen() = median(pretty(range)) when cen is omitted and reports it."""
     ref = r_reduce('crapi_auto', at=AT)
@@ -453,7 +442,6 @@ def test_reduced_coef_and_vcov_do_not_depend_on_cen_and_explicit_cen_is_reported
 # Theme T / centering-19: everything is centred at cen
 # ==============================================================================================================
 @pytest.mark.parametrize('cen', [10.0, 18.5], ids=['cen_on_grid', 'cen_off_grid'])
-@known_defect('T', 'centering-19', note='cen only stored: no centred basis/fit/se/RR')
 def test_reduced_fit_se_and_rr_are_centred_at_cen_like_r(cen):
     ref = r_reduce('crapi_c19', at=AT, cen=cen)
     require_outputs(py_reduce(cen=cen), 'fit', 'se', 'RRfit', 'RRlow', 'RRhigh')
@@ -466,7 +454,6 @@ def test_reduced_fit_se_and_rr_are_centred_at_cen_like_r(cen):
 
 
 @pytest.mark.parametrize('cen', [10.0, 18.5], ids=['cen_on_grid', 'cen_off_grid'])
-@known_defect('T', 'centering-19', note='no centred reduced basis')
 def test_centred_reduced_basis_matches_r(cen):
     """R: basis = scale(onebasis(at, argvar), center = onebasis(cen, argvar), scale = FALSE); its row at cen is zero."""
     ref = r_reduce('crapi_c19b', at=AT, cen=cen)
@@ -479,7 +466,6 @@ def test_centred_reduced_basis_matches_r(cen):
         assert np.all(basis[int(np.flatnonzero(AT == cen)[0])] == 0.0)
 
 
-@known_defect('T', 'centering-19', note='changing cen changes only the centred quantities, which PyDLNM lacks')
 def test_changing_cen_shifts_fit_by_a_constant_and_keeps_se_of_the_difference():
     """fit(cen=a) - fit(cen=b) = (onebasis(b) - onebasis(a)) newcoef is the same at every exposure value (R identity)."""
     a, b = 10.0, 20.0
@@ -508,7 +494,6 @@ def _crosspred_pair():
 np2r('crapi_at2', AT)
 
 
-@known_defect('S3', 'validation-audit-19', note="coef(CrossPred) raises AttributeError (the attribute is `coefficients`)")
 def test_coef_of_a_crosspred_returns_its_coefficients_like_r():
     """R coef.crosspred(object) returns object$coef: the coefficients the prediction was made with."""
     from crossreduce import coef
@@ -536,7 +521,6 @@ def test_coef_and_vcov_of_a_crossreduce_match_r():
                  what='vcov(crossreduce)')
 
 
-@known_defect('S3', 'validation-audit-19', note='no summary() on CrossReduce (R summary.crossreduce)')
 def test_crossreduce_has_a_summary():
     """R summary.crossreduce prints the reduction type, the reduced df and the centring value; OneBasis, CrossBasis and
     CrossPred have a summary() in PyDLNM, CrossReduce does not."""
@@ -575,7 +559,6 @@ def test_onebasis_class_matches_r_onebasis():
         assert_close(_matrix(ob), ref, rtol=1e-12, what=f'OneBasis {kw["fun"]}')
 
 
-@known_defect('S3', 'validation-audit-19', note='no onebasis() function (only the OneBasis class)')
 def test_onebasis_function_exists_and_matches_r():
     """R exports onebasis(x, fun, ...); the port offers only the class, so `from basis import onebasis` fails."""
     from basis import onebasis
@@ -605,7 +588,6 @@ def test_crossbasis_class_matches_r_crossbasis():
     assert_close(_matrix(cb), ref, rtol=1e-12, what='CrossBasis')
 
 
-@known_defect('S3', 'validation-audit-19', note='no crossbasis() function (only the CrossBasis class)')
 def test_crossbasis_function_exists_and_matches_r():
     """R exports crossbasis(x, lag, argvar, arglag); the port offers only the class."""
     from basis import crossbasis
@@ -640,7 +622,6 @@ def _init_public_api():
     return exported, bound
 
 
-@known_defect('S3', 'validation-audit-19', note='logknots/equalknots exist in utils.py but the package does not export them')
 def test_logknots_and_equalknots_are_exported_by_the_package():
     """R exports logknots() and equalknots() (NAMESPACE line 2); PyDLNM's __init__ exports only mklag, seqlag, exphist."""
     exported, bound = _init_public_api()

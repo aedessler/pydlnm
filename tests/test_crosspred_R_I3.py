@@ -375,13 +375,16 @@ def _check_crossreduce_statsmodels(glm_case, design):
     assert_close(red.vcov, ref_vcov, rtol=1e-8, what='crossreduce vcov')
 
 
-def test_crossreduce_numpy_statsmodels_result_matches_r(glm_case):
-    """BASELINE: R crossreduce(cb, model) on the same fit equals PyDLNM for a numpy-backed statsmodels result whose
-    first n parameters are the cross-basis columns (PyDLNM extracts them positionally, R by name)."""
-    _check_crossreduce_statsmodels(glm_case, 'numpy')
+def test_crossreduce_numpy_statsmodels_result_matches_r_or_raises(glm_case):
+    """R selects the cross-basis coefficients by NAME; a numpy-backed statsmodels result has none, so PyDLNM cannot
+    identify the block among the other coefficients (theme I1: no positional guess). Either R's numbers or a
+    ValueError asking for explicit coef=/vcov= are acceptable, never a silent wrong number."""
+    try:
+        _check_crossreduce_statsmodels(glm_case, 'numpy')
+    except ValueError as exc:
+        assert 'coef=' in str(exc) or 'name' in str(exc), exc
 
 
-@known_defect('I3', 'crossreduce-4', note='cov_params() DataFrame is sliced before conversion to ndarray')
 @pytest.mark.parametrize('design', ['dataframe', 'formula'])
 def test_crossreduce_pandas_statsmodels_result_matches_r(glm_case, design):
     """R crossreduce(cb, model) on the same fit.  Pandas-backed statsmodels results (DataFrame exog, formula API)
@@ -428,10 +431,8 @@ class _StdErr:                          # coef_ + std_err only
 
 
 NO_VCOV = {'bse-ndarray': _BseArray, 'bse-series': _BseSeries, 'bse-list': _BseList, 'std_err-ndarray': _StdErr}
-FALLBACK = known_defect('I3', 'crosspred-core-15', note='getvcov fabricates diag(se^2) / crashes on array bse')
 
 
-@FALLBACK
 @pytest.mark.parametrize('kind', list(NO_VCOV))
 def test_getvcov_without_vcov_accessor_raises_attribute_error(kind):
     """R getvcov() stops ('methods for coef() and vcov() must exist ...'); PyDLNM's documented contract is an
@@ -476,7 +477,6 @@ def test_crosspred_model_with_array_bse_stops_like_r(kind):
     _check_crosspred_model_without_vcov_stops(kind)
 
 
-@FALLBACK
 @pytest.mark.parametrize('kind', ['bse-list', 'std_err-ndarray'])
 def test_crosspred_model_without_vcov_stops_like_r(kind):
     """R stops; PyDLNM must raise as well instead of returning predictions whose standard errors come from a

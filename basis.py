@@ -629,3 +629,12 @@ class CrossBasis:
     
     def __str__(self) -> str:
         return self.summary()
+
+def onebasis(x, fun: str = "ns", **kwargs) -> OneBasis:
+    """Functional form of OneBasis, like R's ``onebasis(x, fun, ...)``."""
+    return OneBasis(x, fun=fun, **kwargs)
+
+
+def crossbasis(x, lag=None, argvar=None, arglag=None, group=None, **kwargs) -> CrossBasis:
+    """Functional form of CrossBasis, like R's ``crossbasis(x, lag, argvar, arglag, group)``."""
+    return CrossBasis(x, lag=lag, argvar=argvar, arglag=arglag, group=group, **kwargs)

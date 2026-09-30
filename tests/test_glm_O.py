@@ -774,8 +774,11 @@ def test_wrong_number_of_covariate_names_is_rejected_clearly():
 # --------------------------------------------------------------------------------------------------------------
 # glm-11: aliased coefficients
 # --------------------------------------------------------------------------------------------------------------
-@known_defect(THEME, 'glm-11', note='aliased cb coefficients become NaN in cb_coef/cb_vcov without warning or error')
-@pytest.mark.parametrize('kind', ('improved', 'rpy2'))
+@pytest.mark.parametrize('kind', [
+    'improved',         # fixed by crossreduce's R-style 'coef/vcov do not consistent' check (theme H2)
+    pytest.param('rpy2', marks=known_defect(
+        THEME, 'glm-11', note='aliased cb coefficients become NaN in cb_coef/cb_vcov without warning or error')),
+])
 def test_aliased_cross_basis_coefficients_are_rejected_like_R(kind):
     from improved_glm import ImprovedGLMInterface
     from rpy2_glm import Rpy2GLMInterface

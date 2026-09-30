@@ -592,7 +592,6 @@ def _r_crossreduce_code(coef='h2_bc', vcov='h2_bv'):
     return f'crossreduce(h2_cb, coef={coef}, vcov={vcov}, model.link="log", cen={CEN!r})'
 
 
-@known_defect('H2', 'crossreduce-13', note='NaN coef / vcov accepted: reduced coefficients are NaN (R stops)')
 @pytest.mark.parametrize('name', list(_invalid_values(np.zeros(16), np.eye(16))))
 def test_crossreduce_nan_coef_vcov_stop_like_r(case, name):
     """R: any(is.na(coef)) || any(is.na(vcov)) -> stop('coef/vcov do not consistent with basis matrix').  PyDLNM
@@ -602,7 +601,6 @@ def test_crossreduce_nan_coef_vcov_stop_like_r(case, name):
     assert_stops_like_r(lambda: _crossreduce(case, *bad), 'suppressWarnings(' + _r_crossreduce_code() + ')', name)
 
 
-@known_defect('H2', 'crossreduce-13', note='model= route: aliased (NaN) cross-basis coefficient gives NaN reduced coef')
 def test_crossreduce_model_route_nan_stops_like_r(case):
     from crossreduce import crossreduce
     coef, vcov = _with_extra_terms(case, nan_at=2)
@@ -615,7 +613,6 @@ def test_crossreduce_model_route_nan_stops_like_r(case):
 SIZE_CASES = {**_oversized(np.zeros(16), np.eye(16)), **_undersized(np.zeros(16), np.eye(16))}
 
 
-@known_defect('H2', 'crossreduce-13', note='size mismatch is reported by a raw numpy matmul error, not with the R message')
 @pytest.mark.parametrize('name', list(SIZE_CASES))
 def test_crossreduce_size_mismatch_reports_r_message(case, name):
     """R: length(coef) != ncol(basis) or dim(vcov) != length(coef) -> 'coef/vcov do not consistent with basis
@@ -635,7 +632,6 @@ def test_crossreduce_size_mismatch_raises_value_error(case, name):
         _quiet(_crossreduce, case, *bad)
 
 
-@known_defect('H2', 'crossreduce-13', note='(p,1) column coef: reduced coef returned with shape (k,1), R returns a vector')
 def test_crossreduce_column_coef_returns_plain_vector_like_r(case):
     """R: `coef` given as a p x 1 matrix is accepted and the reduced coefficients are a plain numeric vector.
     PyDLNM returns them with shape (k, 1)."""
@@ -697,7 +693,6 @@ def _push_r_model_without_vcov(coef):
     ''')
 
 
-@known_defect('H2', 'crossreduce-12', note='debug placeholder: params-only model gets vcov = 1e-6 * I, model_info type dummy')
 def test_crossreduce_model_without_vcov_stops_like_r(case):
     """R: getvcov() stops ('methods for coef() and vcov() must exist ...') for a model that has coefficients but no
     covariance.  PyDLNM returns reduced standard errors built from a fabricated 1e-6 * I vcov, without a warning."""

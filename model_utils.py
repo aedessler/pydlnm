@@ -27,7 +27,9 @@ def _link_name(link: Any) -> Optional[str]:
     return _LINK_CLASS_NAMES.get(class_name, class_name if link is not None else None)
 
 
-_NAME_PATTERNS = {'cb': re.compile(r'v[0-9]{1,2}\.l[0-9]{1,2}$'), 'one': re.compile(r'b[0-9]{1,2}$')}
+# trailing punctuation is allowed (patsy names such as Q("cb_gv1.l1")), like R's unanchored grep
+_NAME_PATTERNS = {'cb': re.compile(r'v[0-9]{1,2}\.l[0-9]{1,2}[^0-9A-Za-z]*$'),
+                  'one': re.compile(r'b[0-9]{1,2}[^0-9A-Za-z]*$')}
 
 
 def coefficient_names(model: Any) -> Optional[List[str]]:
@@ -214,17 +216,8 @@ def getvcov(model: Any, model_class: Optional[str] = None) -> np.ndarray:
         except:
             pass
     
-    # If all else fails, try to compute from standard errors
-    if hasattr(model, 'bse') or hasattr(model, 'std_err'):
-        se = getattr(model, 'bse', None) or getattr(model, 'std_err', None)
-        if se is not None:
-            warnings.warn(
-                "Full variance-covariance matrix not available. "
-                "Creating diagonal matrix from standard errors."
-            )
-            se = np.asarray(se)
-            return np.diag(se ** 2)
-    
+    # R stops when there is no vcov() method; a diagonal matrix built from standard errors would discard all
+    # covariances (and give wrong standard errors for a cross-basis), so it is deliberately not fabricated.
     raise AttributeError(
         f"Cannot extract variance-covariance matrix from model of type {model_class}. "
         f"Tried attributes: {vcov_attrs} and methods: {vcov_methods}"
