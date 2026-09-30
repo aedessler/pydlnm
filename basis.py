@@ -450,6 +450,11 @@ class CrossBasis:
     def _create_cross_basis(self):
         """Create the cross-basis matrix using tensor products."""
         
+        # R: modifyList(argvar, list(x = as.numeric(x))) / modifyList(arglag, list(x = seqlag(lag))): an 'x' entry in
+        # argvar / arglag is overridden, never used
+        self.argvar.pop('x', None)
+        self.arglag.pop('x', None)
+
         # Create exposure basis (var dimension)
         # R: basisvar <- onebasis(as.numeric(x)), column-major also for a matrix of lagged occurrences
         x_var = self.x.flatten(order='F')
