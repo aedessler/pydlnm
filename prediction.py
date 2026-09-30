@@ -355,12 +355,14 @@ class CrossPred:
         if len(predlag) > 1:
             warnings.warn("OneBasis prediction ignores lag dimension beyond first value")
         
-        # Create basis matrix
-        basis_matrix = OneBasis(predvar, **self.basis.attributes)
-        
+        # Rebuild the basis with the arguments resolved on the training data
+        # (R mkXpred, type "one": attributes matched with formals(fun))
+        args = self.basis.resolved_args()
+        basis_matrix = OneBasis(predvar, **args)
+
         # Apply centering if specified
         if self.cen is not None:
-            cen_basis = OneBasis([self.cen], **self.basis.attributes)
+            cen_basis = OneBasis([self.cen], **args)
             basis_matrix.basis = basis_matrix.basis - cen_basis.basis
         
         return basis_matrix.basis

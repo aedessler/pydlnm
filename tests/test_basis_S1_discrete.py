@@ -597,8 +597,6 @@ def test_crossbasis_var_basis_without_df_matches_r(argvar, arglag, lag):
     assert_crossbasis_matches_r(_temp(1500), lag, argvar, arglag, rtol=1e-10)
 
 
-@known_defect(THEME, 'basis-discrete-9', 'basis-discrete-1', 'crossbasis-3', 'crossbasis-4',
-              note='the CrossBasis docstring example raises IndexError')
 def test_crossbasis_docstring_example_runs():
     """prediction.py docstring: CrossBasis(temp, lag=21, argvar={'fun': 'bs'}). Only 'it builds' is asserted here
     (its column count also depends on the default-arglag finding)."""

@@ -587,7 +587,6 @@ def _check_sequence_case(case):
     assert_close(np.asarray(cb.basis), ref, rtol=1e-13, what=f'CrossBasis({case}) vs R crossbasis')
 
 
-@known_defect('Q2', 'crossbasis-16', note='python list/tuple knots reach R unconverted (RRuntimeError / NotImplementedError)')
 @pytest.mark.parametrize('case', [c for c in _SEQ if c != 'ndarray_control'])
 def test_crossbasis_accepts_python_sequences_for_knots_and_boundary_knots(case):
     _check_sequence_case(case)

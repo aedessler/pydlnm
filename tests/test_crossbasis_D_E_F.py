@@ -172,8 +172,6 @@ def two_datasets(temp):
 
 
 @pytest.mark.parametrize('argvar, argvar_r', D_CASES)
-@known_defect('D', 'basis-discrete-12', 'crossbasis-8',
-              note='CrossBasis stores Boundary_knots / intercept / cen in the caller dicts')
 def test_caller_dicts_are_not_mutated(temp, argvar, argvar_r):
     """R lists are copy-on-modify: crossbasis() never changes the argvar/arglag it was given."""
     argvar, arglag = copy.deepcopy(argvar), copy.deepcopy(ARGLAG_D)
@@ -187,8 +185,6 @@ def test_caller_dicts_are_not_mutated(temp, argvar, argvar_r):
 
 
 @pytest.mark.parametrize('argvar, argvar_r', D_CASES)
-@known_defect('D', 'basis-discrete-12', 'crossbasis-8',
-              note='second call reuses the first dataset Boundary_knots stored in the shared dict')
 def test_dicts_reused_for_second_dataset_match_r(temp, argvar, argvar_r):
     """Multi-city loop with the dicts built once: dataset B must get its own boundary knots, as in R."""
     a, b = two_datasets(temp)

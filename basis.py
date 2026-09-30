@@ -64,7 +64,20 @@ class OneBasis:
         'strata': StrataBasis,
         'thr': ThresholdBasis,
     }
-    
+
+    # Arguments of each built-in function that are recorded as attributes of a fitted basis:
+    # {attribute name: constructor keyword}. R equivalent: names(formals(fun)) matched against
+    # names(attributes(basis)) in crossbasis() and mkXpred().
+    _RESOLVED_ARGS = {
+        'lin':    {'intercept': 'intercept'},
+        'poly':   {'degree': 'degree', 'scale': 'scale', 'intercept': 'intercept'},
+        'ns':     {'knots': 'knots', 'Boundary_knots': 'Boundary_knots', 'intercept': 'intercept'},
+        'bs':     {'degree': 'degree', 'knots': 'knots', 'Boundary_knots': 'Boundary_knots',
+                   'intercept': 'intercept'},
+        'strata': {'breaks': 'breaks', 'ref': 'ref', 'intercept': 'intercept'},
+        'thr':    {'thr.value': 'thr_value', 'side': 'side', 'intercept': 'intercept'},
+    }
+
     def __init__(self, x: Union[np.ndarray, List], fun: Union[str, Callable] = 'ns', **kwargs):
         # Store original input
         self.x = np.asarray(x, dtype=float)
@@ -138,25 +151,46 @@ class OneBasis:
         """Set column names for the basis matrix."""
         n_cols = self.basis.shape[1]
         self.colnames = [f"b{i+1}" for i in range(n_cols)]
-        
+
+    def resolved_args(self) -> Dict[str, Any]:
+        """
+        Arguments that rebuild this basis at new values of x.
+
+        Data-dependent choices made on the training x (interior knots implied by ``df``, boundary knots, strata
+        breaks, the default threshold, the polynomial scale) are returned as their resolved values. This is what
+        R's ``crossbasis()`` stores in ``attr(, "argvar")``/``attr(, "arglag")`` and what ``mkXpred()`` uses for a
+        ``onebasis`` object, so that prediction reproduces the training basis instead of re-deriving it from the
+        prediction values.
+        """
+        if not isinstance(self.fun, str):
+            return {k: v for k, v in self.attributes.items() if k not in ('range', 'cen')}
+        args = {'fun': self.fun}
+        for attr, keyword in self._RESOLVED_ARGS[self.fun].items():
+            if attr in self.attributes:
+                value = self.attributes[attr]
+                if attr in ('knots', 'Boundary_knots', 'breaks', 'thr.value'):
+                    value = np.atleast_1d(np.asarray(value, dtype=float))
+                args[keyword] = value
+        return args
+
     def __array__(self) -> np.ndarray:
         """Return the basis matrix when converted to array."""
         return self.basis
-    
+
     def __getitem__(self, key):
         """Allow indexing of the basis matrix."""
         return self.basis[key]
-    
+
     @property
     def shape(self) -> Tuple[int, int]:
         """Return the shape of the basis matrix."""
         return self.basis.shape
-    
+
     @property
     def ndim(self) -> int:
         """Return the number of dimensions (always 2)."""
         return 2
-    
+
     def summary(self) -> str:
         """
         Return a summary of the OneBasis object.
@@ -259,9 +293,10 @@ class CrossBasis:
                 f"1 (time series) or {expected_cols} (lag matrix) columns"
             )
         
-        # Set default arguments
-        self.argvar = argvar or {}
-        self.arglag = arglag or {}
+        # Set default arguments. Work on copies: the resolved arguments recorded below (and the defaults injected
+        # here) belong to THIS x, so they must not leak into dicts the caller reuses for another series.
+        self.argvar = dict(argvar) if argvar else {}
+        self.arglag = dict(arglag) if arglag else {}
         
         # Set default lag arguments to EXACTLY match R DLNM defaults
         if len(self.arglag) == 0 or np.diff(self.lag)[0] == 0:
@@ -317,11 +352,14 @@ class CrossBasis:
         # Create OneBasis for exposure dimension
         self.basisvar = OneBasis(x_var, **self.argvar)
 
-        # Store training boundary knots so prediction at out-of-range temperatures
-        # uses the same boundary knots as training, matching R's crossbasis/mkXpred.
-        if self.argvar.get('fun') == 'bs' and 'Boundary_knots' not in self.argvar:
-            x_clean = x_var[~np.isnan(x_var)]
-            self.argvar['Boundary_knots'] = np.array([x_clean.min(), x_clean.max()])
+        # Redefine argvar from the attributes of the fitted basis, as R's crossbasis() does ("they might have been
+        # changed by onebasis"): knots implied by df, Boundary.knots, poly scale, strata breaks and the default
+        # threshold are frozen at their training values, so crosspred/crossreduce/recentering rebuild the identical
+        # basis at new x (incl. out-of-range x). The centering value, if any, is kept.
+        cen = self.argvar.get('cen')
+        self.argvar = self.basisvar.resolved_args()
+        if cen is not None:
+            self.argvar['cen'] = cen
 
         # Create lag basis
         lag_seq = seqlag(self.lag)
@@ -334,7 +372,8 @@ class CrossBasis:
             })()
         else:
             self.basislag = OneBasis(lag_seq, **self.arglag)
-        
+            self.arglag = self.basislag.resolved_args()   # same redefinition for the lag basis
+
         # Store degrees of freedom
         self.df = (self.basisvar.shape[1], self.basislag.shape[1])
         
@@ -384,11 +423,13 @@ class CrossBasis:
         with localconverter(robjects.default_converter + numpy2ri.converter):
             robjects.globalenv['temp_data'] = exposure_values
 
-            # Store boundary knots from training data if not already set
-            if 'Boundary_knots' not in self.argvar:
+            # Boundary knots of the training data (recorded in argvar for ns/bs; other funs fall back to the range)
+            if 'Boundary_knots' in self.argvar:
+                bk_train = self.argvar['Boundary_knots']
+            else:
                 x_clean = exposure_values[~np.isnan(exposure_values)]
-                self.argvar['Boundary_knots'] = np.array([x_clean.min(), x_clean.max()])
-            robjects.globalenv['bk_vals'] = self.argvar['Boundary_knots']
+                bk_train = np.array([x_clean.min(), x_clean.max()])
+            robjects.globalenv['bk_vals'] = bk_train
 
             if var_fun == 'ns':
                 if 'knots' in self.argvar:

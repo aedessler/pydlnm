@@ -24,6 +24,28 @@ except ImportError:
     HAS_RPY2 = False
 
 
+def _eval_r_spline(r_call: str):
+    """Evaluate an R ``splines::ns()``/``splines::bs()`` call.
+
+    Returns ``(basis, interior_knots, boundary_knots)`` where the knots are the ones R actually used, also when it
+    derived them from the data through ``df=``. R's ``onebasis()`` keeps them as attributes of the basis and
+    ``crossbasis()``/``mkXpred()`` rebuild the identical basis at new x from them. Under the numpy2ri converter the
+    attributes of an R result are lost, so the R object is held in a scratch variable and read back.
+    Must be called inside a ``localconverter(default + numpy2ri)`` context.
+    """
+    robjects.r(f'`.pydlnm_spline` <- {r_call}')
+    try:
+        basis = np.array(robjects.r('`.pydlnm_spline`'))
+        knots = np.atleast_1d(np.asarray(
+            robjects.r('as.numeric(attr(`.pydlnm_spline`, "knots"))'), dtype=float))
+        boundary = np.atleast_1d(np.asarray(
+            robjects.r('as.numeric(attr(`.pydlnm_spline`, "Boundary.knots"))'), dtype=float))
+    finally:
+        robjects.r('if (exists(".pydlnm_spline", envir=globalenv())) '
+                   'rm(list=".pydlnm_spline", envir=globalenv())')
+    return basis, knots, boundary
+
+
 class BaseBasisFunction:
     """
     Base class for all basis functions.
@@ -226,6 +248,7 @@ class SplineBasis(BaseBasisFunction):
             Natural spline basis matrix
         """
         x = np.asarray(x, dtype=float)
+        icpt = "TRUE" if self.intercept else "FALSE"
 
         # Use R's natural splines for exact compatibility
         with localconverter(robjects.default_converter + numpy2ri.converter):
@@ -234,36 +257,22 @@ class SplineBasis(BaseBasisFunction):
             robjects.globalenv['_ns_x']  = x
             robjects.globalenv['_ns_bk'] = bk
             if self.knots is not None:
-                knots_array = np.asarray(self.knots, dtype=float)
-                robjects.globalenv['_ns_ik'] = knots_array
-                r_result = robjects.r(
-                    f'splines::ns(`_ns_x`, knots=`_ns_ik`, '
-                    f'intercept={"TRUE" if self.intercept else "FALSE"}, '
-                    f'Boundary.knots=`_ns_bk`)'
-                )
+                robjects.globalenv['_ns_ik'] = np.asarray(self.knots, dtype=float)
+                r_call = (f'splines::ns(`_ns_x`, knots=`_ns_ik`, '
+                          f'intercept={icpt}, Boundary.knots=`_ns_bk`)')
             elif self.df is not None:
-                r_result = robjects.r(
-                    f'splines::ns(`_ns_x`, df={int(self.df)}, '
-                    f'intercept={"TRUE" if self.intercept else "FALSE"}, '
-                    f'Boundary.knots=`_ns_bk`)'
-                )
+                r_call = (f'splines::ns(`_ns_x`, df={int(self.df)}, '
+                          f'intercept={icpt}, Boundary.knots=`_ns_bk`)')
             else:
-                r_result = robjects.r(
-                    f'splines::ns(`_ns_x`, df=4, '
-                    f'intercept={"TRUE" if self.intercept else "FALSE"}, '
-                    f'Boundary.knots=`_ns_bk`)'
-                )
-            
-            # Convert to numpy
-            basis_matrix = np.array(r_result)
-            
-            # Store attributes if available
-            if hasattr(r_result, 'attributes'):
-                r_attrs = dict(r_result.attributes.items())
-                if 'knots' in r_attrs:
-                    self.internal_knots = np.array(r_attrs['knots'])
-            
-            return basis_matrix
+                r_call = (f'splines::ns(`_ns_x`, df=4, '
+                          f'intercept={icpt}, Boundary.knots=`_ns_bk`)')
+            basis_matrix, knots_used, boundary_used = _eval_r_spline(r_call)
+
+        # Record the knots R used (R: attributes of the ns object), so that prediction can rebuild this basis
+        self.internal_knots = knots_used
+        self.attributes['knots'] = knots_used
+        self.attributes['Boundary_knots'] = boundary_used
+        return basis_matrix
 
 
 class BSplineBasis(BaseBasisFunction):
@@ -349,6 +358,7 @@ class BSplineBasis(BaseBasisFunction):
             B-spline basis matrix
         """
         x = np.asarray(x, dtype=float)
+        icpt = "TRUE" if self.intercept else "FALSE"
 
         # Use R's B-splines for exact compatibility.
         # Pass Boundary.knots so predictions outside the training range use the
@@ -361,37 +371,21 @@ class BSplineBasis(BaseBasisFunction):
             robjects.globalenv['_bs_bk']  = boundary
             if self.knots is not None:
                 robjects.globalenv['_bs_ik'] = np.asarray(self.knots, dtype=float)
-                r_result = robjects.r(
-                    f'splines::bs(`_bs_x`, knots=`_bs_ik`, degree={int(self.degree)}, '
-                    f'intercept={"TRUE" if self.intercept else "FALSE"}, '
-                    f'Boundary.knots=`_bs_bk`)'
-                )
+                r_call = (f'splines::bs(`_bs_x`, knots=`_bs_ik`, degree={int(self.degree)}, '
+                          f'intercept={icpt}, Boundary.knots=`_bs_bk`)')
             elif self.df is not None:
-                r_result = robjects.r(
-                    f'splines::bs(`_bs_x`, df={int(self.df)}, degree={int(self.degree)}, '
-                    f'intercept={"TRUE" if self.intercept else "FALSE"}, '
-                    f'Boundary.knots=`_bs_bk`)'
-                )
+                r_call = (f'splines::bs(`_bs_x`, df={int(self.df)}, degree={int(self.degree)}, '
+                          f'intercept={icpt}, Boundary.knots=`_bs_bk`)')
             else:
-                r_result = robjects.r(
-                    f'splines::bs(`_bs_x`, df=4, degree={int(self.degree)}, '
-                    f'intercept={"TRUE" if self.intercept else "FALSE"}, '
-                    f'Boundary.knots=`_bs_bk`)'
-                )
+                r_call = (f'splines::bs(`_bs_x`, df=4, degree={int(self.degree)}, '
+                          f'intercept={icpt}, Boundary.knots=`_bs_bk`)')
+            basis_matrix, knots_used, boundary_used = _eval_r_spline(r_call)
 
-            basis_matrix = np.array(r_result)
-
-            # Cache boundary knots and internal knots from R's output
-            if hasattr(r_result, 'attributes'):
-                r_attrs = dict(r_result.attributes.items())
-                if 'knots' in r_attrs:
-                    self.internal_knots = np.array(r_attrs['knots'])
-                if 'degree' in r_attrs:
-                    self.degree = int(r_attrs['degree'])
-                if 'Boundary.knots' in r_attrs and self.Boundary_knots is None:
-                    self.Boundary_knots = np.array(r_attrs['Boundary.knots'])
-
-            return basis_matrix
+        # Record the knots R used (R: attributes of the bs object), so that prediction can rebuild this basis
+        self.internal_knots = knots_used
+        self.attributes['knots'] = knots_used
+        self.attributes['Boundary_knots'] = boundary_used
+        return basis_matrix
 
 
 class StrataBasis(BaseBasisFunction):

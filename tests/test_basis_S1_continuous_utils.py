@@ -561,7 +561,6 @@ def test_crosspred_custom_callable_with_kwargs_matches_r():
     assert_close(se, ref_se, rtol=1e-10, what='allse')
 
 
-@known_defect(THEME, 'basis-cont-8', note="crosspred replays attributes incl. 'range' into the user's function")
 @pytest.mark.parametrize('cen', [20.0, None], ids=['cen=20', 'uncentred'])
 def test_crosspred_custom_callable_without_kwargs_matches_r(cen):
     """R's mkXpred() passes only the stored attributes that are formals of the function; PyDLNM passes range=... and

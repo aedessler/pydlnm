@@ -206,8 +206,6 @@ def _arglag(kind, fit_lag=(0, LAG)):
 # --------------------------------------------------------------------------------------------------------------------
 # A1: CrossBasis + crosspred with a var basis given by df / poly / default thr        (known defects)
 # --------------------------------------------------------------------------------------------------------------------
-@known_defect('A1', 'basis-cont-1', 'basis-discrete-3', 'crossbasis-9', 'attr-point-8',
-              note='df-based ns/bs knots are re-derived from the prediction grid and the one-value centering basis')
 @pytest.mark.parametrize('cen', [CEN, None], ids=['cen18', 'nocen'])
 @pytest.mark.parametrize('argvar', DF_VAR)
 def test_crosspred_cb_df_var_basis_uses_training_knots(argvar, cen):
@@ -216,8 +214,6 @@ def test_crosspred_cb_df_var_basis_uses_training_knots(argvar, cen):
     _crosspred_vs_r(cb, P + 'cb', temp, seed=11, cen=cen)
 
 
-@known_defect('A1', 'basis-cont-1', 'basis-discrete-3',
-              note='poly scale (max|x| of the training data) is re-derived from the prediction grid / from [cen]')
 @pytest.mark.parametrize('cen', [CEN, None], ids=['cen18', 'nocen'])
 @pytest.mark.parametrize('degree', [2, 3])
 def test_crosspred_cb_poly_scale_from_training_data(degree, cen):
@@ -226,8 +222,6 @@ def test_crosspred_cb_poly_scale_from_training_data(degree, cen):
     _crosspred_vs_r(cb, P + 'cb', temp, seed=12, cen=cen)
 
 
-@known_defect('A1', 'basis-discrete-3',
-              note='default thr.value (median of the training x) is re-derived from the prediction grid / from [cen]')
 @pytest.mark.parametrize('cen', [15.0, None], ids=['cen15', 'nocen'])
 def test_crosspred_cb_thr_default_threshold_from_training_data(cen):
     temp = _series()
@@ -235,8 +229,6 @@ def test_crosspred_cb_thr_default_threshold_from_training_data(cen):
     _crosspred_vs_r(cb, P + 'cb', temp, seed=13, cen=cen)
 
 
-@known_defect('A1', 'basis-discrete-3', 'basis-cont-1',
-              note='strata breaks derived from df (quantiles of the training x) are re-derived from the grid / [cen]')
 @pytest.mark.parametrize('cen', [15.0, None], ids=['cen15', 'nocen'])
 def test_crosspred_cb_strata_df_breaks_from_training_data(cen):
     temp = _series()
@@ -244,8 +236,6 @@ def test_crosspred_cb_strata_df_breaks_from_training_data(cen):
     _crosspred_vs_r(cb, P + 'cb', temp, seed=13, cen=cen)
 
 
-@known_defect('A1', 'basis-cont-1', 'crossbasis-9', 'attr-point-8',
-              note='CrossBasis writes Boundary_knots into the caller argvar dict, which leaks into the next series')
 def test_crossbasis_does_not_leak_resolved_args_between_series():
     """One argvar dict reused for two series (the usual multi-city loop): each cross-basis must equal R's."""
     from basis import CrossBasis
@@ -259,8 +249,6 @@ def test_crossbasis_does_not_leak_resolved_args_between_series():
         assert_close(np.asarray(cb.basis), rget(f'unclass({P}cb)'), rtol=1e-10, what=f'crossbasis (series {start})')
 
 
-@known_defect('A1', 'basis-cont-1', 'basis-discrete-3', 'crossbasis-9', 'attr-point-8',
-              note='the reduced-coefficient path rebuilds the df-based var basis from grid and [cen]')
 @pytest.mark.parametrize('argvar', DF_VAR)
 def test_crosspred_reduced_coef_df_var_basis(argvar):
     """coef/vcov of length ncol(var basis) (crossreduce-style) with the cross-basis: R rebuilds the var basis from
@@ -285,8 +273,6 @@ class ImprovedGLMInterface:
         self.cb_vcov = np.asarray(vcov)
 
 
-@known_defect('A1', 'attr-point-8', 'basis-cont-1', 'basis-discrete-3', 'crossbasis-9',
-              note='attrdl centering basis is built from the single value cen (knots re-derived from one number)')
 @pytest.mark.parametrize('argvar', DF_VAR[:3])
 def test_attrdl_forward_af_df_var_basis(argvar):
     """Per-observation forward attributable fraction (Lancet attrdl.R vs PyDLNM attrdl) at the training x."""
@@ -310,7 +296,6 @@ def test_attrdl_forward_af_df_var_basis(argvar):
 # --------------------------------------------------------------------------------------------------------------------
 # A1: OneBasis attributes and crosspred(OneBasis)                                     (known defects)
 # --------------------------------------------------------------------------------------------------------------------
-@known_defect('A1', *_ALL_A1, note='ns/bs attributes never hold the knots / Boundary.knots that were used')
 @pytest.mark.parametrize('spec', SPLINE_ONEBASIS)
 def test_onebasis_spline_records_knots_and_boundary_knots(spec):
     x = _series(500)
@@ -320,8 +305,6 @@ def test_onebasis_spline_records_knots_and_boundary_knots(spec):
                  what='attribute Boundary.knots')
 
 
-@known_defect('A1', *_ALL_A1, note='crosspred(OneBasis) rebuilds ns/bs at the grid with grid-derived knots '
-                                   '(wrong values, matmul mismatch, or an R error for ns with cen)')
 @pytest.mark.parametrize('cen', [None, CEN], ids=['nocen', 'cen18'])
 @pytest.mark.parametrize('spec', SPLINE_ONEBASIS)
 def test_crosspred_onebasis_spline_uses_training_knots(spec, cen):
@@ -336,8 +319,6 @@ THR_CASES = [pytest.param({'thr_value': 20.0}, id='thr20'),
              pytest.param({'thr_value': np.array([10.0, 25.0]), 'side': 'd'}, id='thr10_25_side_d')]
 
 
-@known_defect('A1', 'basis-discrete-7', 'basis-discrete-3',
-              note="attribute 'thr.value' is swallowed by **kwargs, so the threshold becomes the grid median")
 @pytest.mark.parametrize('cen', [None, 15.0], ids=['nocen', 'cen15'])
 @pytest.mark.parametrize('spec', THR_CASES)
 def test_crosspred_onebasis_thr_keeps_training_threshold(spec, cen):
@@ -349,9 +330,6 @@ def test_crosspred_onebasis_thr_keeps_training_threshold(spec, cen):
 # --------------------------------------------------------------------------------------------------------------------
 # A2: lag sub-period / single lag / bylag with a spline lag basis                     (known defects)
 # --------------------------------------------------------------------------------------------------------------------
-@known_defect('A2', 'crossbasis-9', 'basis-discrete-3', 'basis-cont-1',
-              note='the lag basis is rebuilt with Boundary.knots = range of the predicted lag sub-period '
-                   '(and df-based knots from its quantiles)')
 @pytest.mark.parametrize('kind, fit_lag, pred_lag, bylag', LAG_SUB)
 def test_crosspred_cb_lag_subperiod_uses_training_lag_boundary_knots(kind, fit_lag, pred_lag, bylag):
     temp = _series()

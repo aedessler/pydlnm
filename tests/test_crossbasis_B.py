@@ -163,6 +163,8 @@ VAR_NO_FUN = [
     ('df4', {'df': 4}),
     ('df5', {'df': 5}),
     ('knots', {'knots': KV}),
+]
+VAR_NO_FUN_INTERCEPT = [
     ('knots-intercept', {'knots': KV, 'intercept': True}),
 ]
 
@@ -252,9 +254,17 @@ def test_var_spline_intercept_true_matches_r(name, argvar):
     check_crossbasis(X, LAG, argvar, LAG_NS)
 
 
-@pytest.mark.parametrize('name,argvar', _cases(VAR_NO_FUN, ('basis-discrete-1', 'crossbasis-3', 'crossbasis-4'),
-                                               'no fun: R default is ns, time-series path used bs'))
+@pytest.mark.parametrize('name,argvar', VAR_NO_FUN)
 def test_var_without_fun_defaults_to_ns_like_r(name, argvar):
+    """Fixed with A1: CrossBasis redefines argvar from the fitted OneBasis (fun='ns'), so the time-series path
+    no longer falls back to bs."""
+    check_crossbasis(X, LAG, argvar, LAG_NS)
+
+
+@pytest.mark.parametrize('name,argvar', _cases(VAR_NO_FUN_INTERCEPT, ('basis-discrete-1', 'crossbasis-3',
+                                                                      'crossbasis-4'),
+                                               'no fun + intercept=True: intercept ignored by the time-series path'))
+def test_var_without_fun_with_intercept_matches_r(name, argvar):
     check_crossbasis(X, LAG, argvar, LAG_NS)
 
 
