@@ -405,71 +405,17 @@ class CrossBasis:
         """
         lag_seq = seqlag(self.lag)
         n_obs = self.x.shape[0]
-        exposure_values = self.x.flatten()
         max_lag = int(np.max(lag_seq))
         
         # Initialize crossbasis matrix with NaN
         self.basis = np.full((n_obs, n_var_basis * n_lag_basis), np.nan)
         
-        # Create variable and lag basis functions using R for exact matching
-        import os
-        os.environ['R_HOME'] = '/Library/Frameworks/R.framework/Resources'
-        import rpy2.robjects as robjects
-        from rpy2.robjects import numpy2ri
-        from rpy2.robjects.conversion import localconverter
-        
-        # Create variable basis using R
-        var_fun = self.argvar.get('fun', 'bs')
-        with localconverter(robjects.default_converter + numpy2ri.converter):
-            robjects.globalenv['temp_data'] = exposure_values
+        # As in R's crossbasis(), the exposure and lag bases are the onebasis() objects built in
+        # _create_cross_basis() from argvar/arglag, so every function (lin, poly, ns, bs, strata, thr, integer, a
+        # callable) and every argument (df, knots, degree, intercept, ...) is honoured in both dimensions.
+        r_var_basis = np.asarray(self.basisvar.basis, dtype=float)
+        r_lag_basis = np.asarray(self.basislag.basis, dtype=float)
 
-            # Boundary knots of the training data (recorded in argvar for ns/bs; other funs fall back to the range)
-            if 'Boundary_knots' in self.argvar:
-                bk_train = self.argvar['Boundary_knots']
-            else:
-                x_clean = exposure_values[~np.isnan(exposure_values)]
-                bk_train = np.array([x_clean.min(), x_clean.max()])
-            robjects.globalenv['bk_vals'] = bk_train
-
-            if var_fun == 'ns':
-                if 'knots' in self.argvar:
-                    robjects.globalenv['var_knots'] = self.argvar['knots']
-                    robjects.r('var_basis <- ns(temp_data, knots=var_knots, Boundary.knots=bk_vals)')
-                else:
-                    df = self.argvar.get('df', 4)
-                    robjects.r(f'var_basis <- ns(temp_data, df={df}, Boundary.knots=bk_vals)')
-            else:  # bs (default)
-                if 'knots' in self.argvar:
-                    robjects.globalenv['var_knots'] = self.argvar['knots']
-                    degree = self.argvar.get('degree', 3)
-                    robjects.r(f'var_basis <- bs(temp_data, knots=var_knots, degree={degree}, Boundary.knots=bk_vals)')
-                else:
-                    df = self.argvar.get('df', 3)
-                    degree = self.argvar.get('degree', 3)
-                    robjects.r(f'var_basis <- bs(temp_data, df={df}, degree={degree}, Boundary.knots=bk_vals)')
-
-            r_var_basis = np.array(robjects.r('var_basis'))
-
-        # Create lag basis — identity for integer lags, otherwise ns via R
-        lag_fun = self.arglag.get('fun', 'ns')
-        if lag_fun == 'integer':
-            r_lag_basis = np.eye(len(lag_seq))
-        else:
-            with localconverter(robjects.default_converter + numpy2ri.converter):
-                lag_values = np.array(lag_seq, dtype=float)
-                robjects.globalenv['lag_seq'] = lag_values
-
-                if 'knots' in self.arglag:
-                    robjects.globalenv['lag_knots'] = self.arglag['knots']
-                    intercept = self.arglag.get('intercept', True)
-                    robjects.r(f'lag_basis <- ns(lag_seq, knots=lag_knots, intercept={str(intercept).upper()})')
-                else:
-                    df = self.arglag.get('df', 4)
-                    intercept = self.arglag.get('intercept', True)
-                    robjects.r(f'lag_basis <- ns(lag_seq, df={df}, intercept={str(intercept).upper()})')
-
-                r_lag_basis = np.array(robjects.r('lag_basis'))
-        
         # Build the cross-basis using vectorized matrix multiplications.
         # For each variable basis column v:
         #   1. Build a lagged matrix L where L[i, t] = r_var_basis[i-t, v]

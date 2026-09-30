@@ -163,8 +163,6 @@ VAR_NO_FUN = [
     ('df4', {'df': 4}),
     ('df5', {'df': 5}),
     ('knots', {'knots': KV}),
-]
-VAR_NO_FUN_INTERCEPT = [
     ('knots-intercept', {'knots': KV, 'intercept': True}),
 ]
 
@@ -205,7 +203,7 @@ LAG_BARE = [
     ('bs-deg2', {'fun': 'bs', 'degree': 2}),
 ]
 
-# grid var x lag; (ns|bs with knots) x (ns|integer) is the sub-space that is already faithful today
+# grid var x lag over every var/lag function
 GRID_VAR = {
     'lin': {'fun': 'lin'},
     'poly2': {'fun': 'poly', 'degree': 2},
@@ -229,42 +227,37 @@ def _defect_marks(*finding_ids, note=''):
     return [] if os.environ.get('PYDLNM_XFAIL_OFF') else [known_defect(THEME, *finding_ids, note=note)]
 
 
+def _plain(table):
+    """pytest params (id, spec) for a table whose defect is fixed."""
+    return [pytest.param(name, spec, id=name) for name, spec in table]
+
+
 def _cases(table, defect_ids, note=''):
     """pytest params (id, spec) all marked as known defects of theme B."""
     return [pytest.param(name, spec, id=name, marks=_defect_marks(*defect_ids, note=note)) for name, spec in table]
 
 
 # ---------------------------------------------------------------------------------------------- known defects
-@pytest.mark.parametrize('name,argvar', _cases(VAR_FUN, ('basis-cont-2', 'basis-discrete-1', 'crossbasis-3',
-                                                         'attr-point-11'), 'var fun computed as bs'))
+@pytest.mark.parametrize('name,argvar', _plain(VAR_FUN))
 def test_var_fun_lin_poly_strata_thr_matches_r(name, argvar):
     check_crossbasis(X, LAG, argvar, LAG_NS)
 
 
-@known_defect(THEME, 'basis-cont-2', 'crossbasis-3', note='callable var fun computed as bs')
 @pytest.mark.parametrize('k', [2, 3])
 def test_var_callable_fun_matches_r(k):
     # R can only name a function; the Python twin is passed as a callable with the same extra argument
     check_crossbasis(X, LAG, {'fun': _shift_quad, 'k': k}, LAG_NS)
 
 
-@pytest.mark.parametrize('name,argvar', _cases(VAR_SPLINE_INTERCEPT, ('basis-cont-2', 'basis-discrete-1',
-                                                                      'crossbasis-4'), 'var intercept ignored'))
+@pytest.mark.parametrize('name,argvar', _plain(VAR_SPLINE_INTERCEPT))
 def test_var_spline_intercept_true_matches_r(name, argvar):
     check_crossbasis(X, LAG, argvar, LAG_NS)
 
 
 @pytest.mark.parametrize('name,argvar', VAR_NO_FUN)
 def test_var_without_fun_defaults_to_ns_like_r(name, argvar):
-    """Fixed with A1: CrossBasis redefines argvar from the fitted OneBasis (fun='ns'), so the time-series path
-    no longer falls back to bs."""
-    check_crossbasis(X, LAG, argvar, LAG_NS)
-
-
-@pytest.mark.parametrize('name,argvar', _cases(VAR_NO_FUN_INTERCEPT, ('basis-discrete-1', 'crossbasis-3',
-                                                                      'crossbasis-4'),
-                                               'no fun + intercept=True: intercept ignored by the time-series path'))
-def test_var_without_fun_with_intercept_matches_r(name, argvar):
+    """Fixed with A1/B: CrossBasis redefines argvar from the fitted OneBasis (fun='ns') and the time-series path
+    uses that basis, so neither the default function nor intercept is lost."""
     check_crossbasis(X, LAG, argvar, LAG_NS)
 
 
@@ -274,8 +267,7 @@ def test_var_bare_defaults_match_r(name, argvar):
     check_crossbasis(X, LAG, argvar, LAG_NS)
 
 
-@pytest.mark.parametrize('name,arglag', _cases(LAG_FUN, ('basis-discrete-1', 'crossbasis-3', 'attr-point-11',
-                                                         'basis-cont-2'), 'lag fun computed as ns / crash'))
+@pytest.mark.parametrize('name,arglag', _plain(LAG_FUN))
 def test_lag_fun_matches_r(name, arglag):
     check_crossbasis(X, LAG, VAR_BS2, arglag)
 
@@ -290,10 +282,7 @@ def _grid():
     params = []
     for vn, vs in GRID_VAR.items():
         for ln, ls in GRID_LAG.items():
-            faithful = vn in ('ns', 'bs') and ln in ('ns', 'integer')
-            marks = [] if faithful else _defect_marks('attr-point-11', 'crossbasis-3', 'basis-discrete-1',
-                                                      note='var or lag fun other than ns/bs, ns/integer')
-            params.append(pytest.param(vs, ls, id=f'var-{vn}_lag-{ln}', marks=marks))
+            params.append(pytest.param(vs, ls, id=f'var-{vn}_lag-{ln}'))
     return params
 
 
@@ -335,14 +324,12 @@ def _fit_both(argvar, arglag):
             rget('unname(vcov(cbB_mp)[cbB_ip, cbB_ip])'))
 
 
-@known_defect(THEME, 'attr-point-11', note='GLM coefficients fitted on the wrong cross-basis')
 @pytest.mark.parametrize('name,argvar,arglag', FIT_CASES, ids=[c[0] for c in FIT_CASES])
 def test_glm_coefficients_on_python_crossbasis_match_r(name, argvar, arglag):
     _, coef_r, coef_p, _ = _fit_both(argvar, arglag)
     assert_close(coef_p, coef_r, rtol=1e-8, what=f'glm coefficients ({name}) fitted on Python vs R cross-basis')
 
 
-@known_defect(THEME, 'attr-point-11', note='crosspred from a model fitted on the wrong cross-basis')
 @pytest.mark.parametrize('name,argvar,arglag', FIT_PRED_CASES, ids=[c[0] for c in FIT_PRED_CASES])
 def test_crosspred_of_model_fitted_on_python_crossbasis_matches_r(name, argvar, arglag):
     from prediction import crosspred

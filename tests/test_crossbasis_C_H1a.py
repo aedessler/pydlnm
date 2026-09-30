@@ -191,14 +191,12 @@ def test_single_lag_ignores_user_arglag(arglag):
 # ==============================================================================================================
 # Theme C: lin / strata lag functions must not be rebuilt as ns                                     attr-point-10
 # ==============================================================================================================
-@known_defect('C', 'attr-point-10', note='arglag lin is re-created as ns in the time-series builder: cannot broadcast')
 def test_lin_lag_basis_matches_r():
     x = _series(300, start=1000)
     cb, ref = assert_crossbasis_matches_r(x, 5, _bs2_knots(x), arglag={'fun': 'lin'})
     assert ref['mat'].shape == (300, 10)         # intercept + slope over the lag
 
 
-@known_defect('C', 'attr-point-10', note='arglag strata with breaks is re-created as ns: cannot broadcast')
 def test_strata_breaks_lag_basis_matches_r():
     x = _series(300, start=1000)
     cb, ref = assert_crossbasis_matches_r(x, 6, _bs2_knots(x),

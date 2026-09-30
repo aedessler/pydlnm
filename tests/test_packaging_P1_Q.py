@@ -465,16 +465,12 @@ def construct_probe(sentinel_r_home):
     return res
 
 
-@known_defect('Q2', 'basis-discrete-18', 'crossbasis-16', 'basis-cont-17',
-              note='basis.py:377 sets os.environ R_HOME on every time-series construction')
 def test_crossbasis_construction_keeps_os_environ_r_home(construct_probe):
     p = construct_probe
     assert p['env_before'] == p['sentinel']
     assert p['env_after'] == p['sentinel'], f"CrossBasis changed os.environ['R_HOME'] to {p['env_after']!r}"
 
 
-@known_defect('Q2', 'basis-discrete-18', 'crossbasis-16', 'basis-cont-17',
-              note='the running R reads R_HOME live, so R.home() switches to the hard-coded installation')
 def test_crossbasis_construction_keeps_embedded_r_home(construct_probe):
     p = construct_probe
     assert p['R_home_before'] == p['R_before'] == p['sentinel']
@@ -502,8 +498,6 @@ _CB_CONFIGS = {
 }
 
 
-@known_defect('Q2', 'crossbasis-16', note='CrossBasis assigns temp_data, bk_vals, var_knots, lag_seq, lag_knots, '
-                                          'var_basis, lag_basis in the caller\'s R global environment')
 @pytest.mark.parametrize('config', list(_CB_CONFIGS))
 def test_crossbasis_does_not_clobber_user_r_objects(config):
     from basis import CrossBasis
@@ -518,8 +512,6 @@ def test_crossbasis_does_not_clobber_user_r_objects(config):
     assert_close(np.asarray(cb.basis), ref, rtol=1e-13, what=f'CrossBasis({config})')
 
 
-@known_defect('Q2', 'crossbasis-16', note='unqualified bs()/ns() calls are evaluated in the global env and pick up '
-                                          'user-defined functions of the same name')
 @pytest.mark.parametrize('masked', ['bs', 'ns'])
 def test_crossbasis_ignores_user_defined_r_functions_named_bs_and_ns(masked):
     from basis import CrossBasis

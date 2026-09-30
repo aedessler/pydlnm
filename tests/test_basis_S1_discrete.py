@@ -767,16 +767,19 @@ def test_onebasis_unknown_function_names_raise_in_both(fun):
 # =====================================================================================================================
 # CrossBasis with a strata / integer var or lag basis (crossbasis-18, crossbasis-20)
 # =====================================================================================================================
-@known_defect(THEME, 'crossbasis-18', 'basis-discrete-4', 'basis-discrete-1', 'basis-discrete-9',
-              note='needs the strata fix and the CrossBasis dispatch fix (a strata var/lag basis is replaced by bs/ns today)')
 @pytest.mark.parametrize('argvar,arglag,lag', [
     (dict(fun='strata', breaks=np.array([10.0, 20.0])), dict(fun='ns', df=3), 6),
-    (dict(fun='strata', df=3), dict(fun='ns', df=3), 6),
     (dict(fun='ns', df=3), dict(fun='strata', breaks=np.array([1.0, 5.0, 10.0])), 15),
     (dict(fun='ns', df=3), dict(fun='strata', df=3), 15)], ids=lambda v: str(v))
 def test_crossbasis_strata_var_or_lag_basis_matches_r(argvar, arglag, lag):
-    """R builds crossbasis() from strata() columns of onebasis(); PyDLNM only honours ns/bs (var) and ns/integer (lag)."""
+    """R builds crossbasis() from strata() columns of onebasis(); fixed with theme B (CrossBasis uses the marginal
+    bases instead of recomputing bs/ns)."""
     assert_crossbasis_matches_r(_temp(400), lag, argvar, arglag)
+
+
+@known_defect(THEME, 'basis-discrete-4', note='strata df= places its breaks differently from R (S1)')
+def test_crossbasis_strata_df_var_basis_matches_r():
+    assert_crossbasis_matches_r(_temp(400), 6, dict(fun='strata', df=3), dict(fun='ns', df=3))
 
 
 @known_defect(THEME, 'crossbasis-20', note="argvar fun='integer' is unknown to OneBasis / the time-series path")
