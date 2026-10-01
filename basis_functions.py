@@ -81,7 +81,7 @@ def _r_spline_basis(fun: str, x, df, knots, degree, intercept, boundary_knots):
             scratch['ik'] = _as_vector(knots)
             args.append('knots=ik')
         elif df is not None:
-            args.append(f'df={int(df)}')
+            args.append(f'df={_r_number(df)}')
         if fun == 'bs':
             args.append(f'degree={int(degree)}')
         args.append(f'intercept={"TRUE" if intercept else "FALSE"}')
@@ -116,7 +116,7 @@ def _r_cr_design(x: np.ndarray, knots: np.ndarray, k: int) -> Tuple[np.ndarray, 
     try:
         scratch['x'] = x
         scratch['knots'] = knots
-        _r_eval(f'oo <- mgcv::smooth.construct.cr.smooth.spec(mgcv::s(x, bs = "cr", k = {k}), '
+        _r_eval(f'oo <- mgcv::smooth.construct.cr.smooth.spec(mgcv::s(x, bs = "cr", k = {_r_number(k)}), '
                 f'data = list(x = x), knots = list(x = knots))', scratch)
         return np.array(_r_eval('unclass(oo$X)', scratch)), np.array(_r_eval('unclass(oo$S[[1]])', scratch))
     finally:
@@ -127,6 +127,13 @@ def _r_colon(start, end) -> np.ndarray:
     """R's ``start:end`` (step +1, or -1 if end < start; the last value never exceeds ``end`` beyond 1e-10)."""
     n = int(np.floor(abs(end - start) + 1e-10)) + 1
     return start + (1.0 if start <= end else -1.0) * np.arange(n)
+
+
+def _r_number(value) -> str:
+    """A number as an R literal that keeps a fraction: the fraction is part of R's own arithmetic (``seq.int(length.out =)``
+    rounds it up, ``a:b`` truncates it, ``round()`` goes to even), so it must reach that arithmetic unchanged."""
+    value = float(value)
+    return str(int(value)) if value.is_integer() else repr(value)
 
 
 def _r_format(values: np.ndarray) -> np.ndarray:
@@ -502,9 +509,10 @@ class StrataBasis(BaseBasisFunction):
         if self.breaks is not None:
             breaks = np.unique(np.atleast_1d(np.asarray(self.breaks, dtype=float)))
         elif self.df - intercept > 0:
-            k = int(self.df) - intercept
-            # R: quantile(x, 1/(df-intercept+1)*1:(df-intercept), na.rm=TRUE), in R's own arithmetic
-            breaks = quantile7(x_clean, (1.0 / (k + 1)) * np.arange(1, k + 1))
+            m = self.df - intercept
+            # R: quantile(x, 1/(df-intercept+1)*1:(df-intercept), na.rm=TRUE), in R's own arithmetic: a fractional df keeps
+            # its fraction in the denominator, and ':' cuts it only for the number of breaks
+            breaks = quantile7(x_clean, (1.0 / (m + 1)) * _r_colon(1, m))
         else:
             breaks = None
         df = (0 if breaks is None else len(breaks)) + intercept
@@ -766,14 +774,15 @@ class PSplineBasis(BaseBasisFunction):
         # DEFINE KNOTS AND DF
         knots = self.knots
         if knots is None or len(knots) == 2:
-            nik = int(df) - degree + 2 - intercept
+            nik = df - degree + 2 - intercept                      # R keeps a fractional df here
             if nik <= 1:
                 raise ValueError("basis dimension too small for b-spline degree")
             width = (observed_range[1] - observed_range[0]) * 0.001
             xl = (knots.min() if knots is not None else xx.min()) - width
             xu = (knots.max() if knots is not None else xx.max()) + width
             dx = (xu - xl) / (nik - 1)
-            knots = np.linspace(xl - dx * degree, xu + dx * degree, nik + 2 * degree)
+            # R: seq(..., length = nik + 2 * degree); a fractional length is rounded up
+            knots = np.linspace(xl - dx * degree, xu + dx * degree, int(np.ceil(nik + 2 * degree)))
         else:
             df = len(knots) - degree - 2 + intercept
             if df - degree <= 1:
@@ -808,7 +817,7 @@ class PSplineBasis(BaseBasisFunction):
         elif penalty.shape != (basis.shape[1], basis.shape[1]):
             raise ValueError("dimensions of 'S' not compatible")
 
-        self.attributes.update({'df': int(df), 'knots': knots, 'degree': degree, 'intercept': self.intercept,
+        self.attributes.update({'df': df, 'knots': knots, 'degree': degree, 'intercept': self.intercept,
                                 'fx': self.fx, 'S': penalty, 'diff': self.diff})
         return basis
 
@@ -856,10 +865,11 @@ class CRSplineBasis(BaseBasisFunction):
 
         # DEFINE KNOTS AND DF
         if self.knots is None:
-            df = int(self.df)
+            df = self.df
             if df < 3:
                 raise ValueError("'df' must be >=3")
-            knots = np.quantile(np.unique(xx), np.linspace(0.0, 1.0, df + not_intercept))
+            # R: seq(0, 1, length = df + !intercept); a fractional length is rounded up
+            knots = np.quantile(np.unique(xx), np.linspace(0.0, 1.0, int(np.ceil(df + not_intercept))))
         else:
             knots = self.knots
             df = len(knots) - not_intercept
@@ -894,6 +904,6 @@ class CRSplineBasis(BaseBasisFunction):
         elif result.shape != (basis.shape[1], basis.shape[1]):
             raise ValueError("dimensions of 'S' not compatible")
 
-        self.attributes.update({'df': int(df), 'knots': knots, 'intercept': self.intercept, 'fx': self.fx,
+        self.attributes.update({'df': df, 'knots': knots, 'intercept': self.intercept, 'fx': self.fx,
                                 'S': result})
         return basis
