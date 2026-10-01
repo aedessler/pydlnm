@@ -276,7 +276,8 @@ def recenter_basis(basis: CrossBasis,
         x=basis.x,
         lag=basis.lag,
         argvar=new_argvar,
-        arglag=basis.arglag
+        arglag=basis.arglag,
+        group=getattr(basis, '_group_labels', None)       # stacked series: the lags stay inside each group
     )
     
     # Store original range and centering info
