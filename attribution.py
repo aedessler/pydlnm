@@ -111,7 +111,12 @@ def attrdl(x: np.ndarray,
     nsim : int, default 5000
         Number of simulations.
     sub : array-like of bool, optional
-        Observations to keep (applied to ``x`` and ``cases`` before the lags are built).
+        Observations (rows) to attribute, e.g. the days of one summer. The lag windows (lagged exposures for
+        ``dir='back'``, forward moving average of the cases for ``dir='forw'``) are built on the FULL series and
+        ``sub`` only selects rows afterwards, as the Europe-2022 script does for its sub-periods; the per-observation
+        results have one entry per kept row, and the totals use the kept rows with a complete window
+        (``den`` = observed cases of the kept rows). R's ``attrdl`` has no ``sub``: this equals its ``tot=FALSE``
+        result restricted to the rows.
     name : str, optional
         Name of the cross-basis in ``model``: prefix of the coefficient names of its terms (R: the name of the
         basis object); selects its block in a model that holds several cross-bases.
@@ -130,9 +135,8 @@ def attrdl(x: np.ndarray,
     cases = asfloat(cases, copy=True)
     if sub is not None:
         sub = np.asarray(sub, dtype=bool)
-        if len(sub) != len(x):
-            raise ValueError("sub must have the same length as x")
-        x, cases = x[sub], cases[sub]
+        if sub.shape != (len(x),):
+            raise ValueError("sub must be a logical vector with one value per observation of x")
 
     cen = _resolve_cen(cen, basis)
 
@@ -164,13 +168,20 @@ def attrdl(x: np.ndarray,
                 raise ValueError("'cases' must be a vector if dir='back'")
             if cases.shape[1] != n_lag:
                 raise ValueError("dimension of 'cases' not compatible")
-            den = np.nansum(np.nanmean(cases, axis=1))
+            den = np.nansum(np.nanmean(cases if sub is None else cases[sub], axis=1))
             cases = cases.mean(axis=1)
         else:
             cases = cases.ravel()
-            den = np.nansum(cases)
+            den = np.nansum(cases if sub is None else cases[sub])
             if dir == "forw":
                 cases = lagmatrix(cases, -lags).mean(axis=1)
+
+    # Sub-period: the lag windows above come from the FULL series (a window may reach outside the sub-period);
+    # only the rows of 'sub' are attributed, and 'den' is the observed total of those rows
+    if sub is not None:
+        at, cases = at[sub], cases[sub]
+        if x.ndim == 1:
+            x = x[sub]
 
     # Coefficients and the design matrix summed over the lags
     coef_vec, vcov_mat = _resolve_coef_vcov(basis, model, coef, vcov, name)
