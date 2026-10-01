@@ -247,9 +247,7 @@ class CrossPred:
         
         # Get original lag range and set the prediction lag range
         if self.reduced_coefficients:
-            self.orig_lag = np.array([0, 0])
-            if lag is not None and not np.array_equal(mklag(lag), self.orig_lag):
-                raise ValueError("'lag' is not applicable to reduced (overall-effect) coefficients")
+            self.orig_lag = np.array([0, 0])        # R: the one-basis has the single lag [0, 0]; 'lag' may name a sub-period
         elif hasattr(basis, 'lag'):
             self.orig_lag = basis.lag
         else:
@@ -368,10 +366,7 @@ class CrossPred:
     def _create_onebasis_prediction_matrix(self, predvar: np.ndarray, predlag: np.ndarray) -> np.ndarray:
         """Create prediction matrix for one-dimensional basis."""
         
-        # For OneBasis, predlag should be ignored (or length 1)
-        if len(predlag) > 1:
-            warnings.warn("OneBasis prediction ignores lag dimension beyond first value")
-        
+        # R (mkXpred, type "one"): the same exposure basis for every lag requested (there is no lag dimension)
         # Rebuild the basis with the arguments resolved on the training data
         # (R mkXpred, type "one": attributes matched with formals(fun))
         args = self.basis.resolved_args()
@@ -382,17 +377,20 @@ class CrossPred:
             cen_basis = OneBasis([self.cen], **args)
             basis_matrix.basis = basis_matrix.basis - cen_basis.basis
         
-        return basis_matrix.basis
+        # rows ordered VAR-outer, LAG-inner
+        return np.repeat(basis_matrix.basis, len(predlag), axis=0)
     
     def _generate_overall_predictions(self):
         """Generate overall cumulative predictions."""
         
         if self.reduced_coefficients:
-            # Overall effects of reduced coefficients: the exposure basis (single lag [0, 0]) times the coefficients
+            # Overall effects of reduced coefficients: the exposure basis times the coefficients, summed over the integer
+            # lags of the period (R: Xpredall <- sum of Xpred over seqlag(lag); one lag unless 'lag' names a sub-period)
             var_basis = self.variable_basis.basis
             if self.cen is not None:
                 cen_basis = OneBasis([self.cen], **self.original_basis.argvar)
                 var_basis = var_basis - cen_basis.basis
+            var_basis = len(seqlag(self.lag)) * var_basis
             
             self.allfit = var_basis @ self.coefficients
             allvar = np.sum((var_basis @ self.vcov) * var_basis, axis=1)
