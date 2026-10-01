@@ -186,6 +186,7 @@ class Scenario:
 
     # ---- PyDLNM side
     def py_attrdl(self, x=None, cases=None, **kw):
+        kw.setdefault('dir', 'forw')       # the R wrapper above defaults to dir='forw' as well; PyDLNM's own default is R's 'back'
         import attribution
         return _quiet(attribution.attrdl, self.x if x is None else x, self.cb, self.cases if cases is None else cases,
                       model=ImprovedGLMInterface(self.coef, self.vcov), **kw)
@@ -415,8 +416,8 @@ def test_inputs_are_not_modified_and_series_are_accepted(chi):
     base = chi.py_attrdl(type='af', tot=False, cen=chi.cen, range=rng)['af']
     idx = pd.date_range('1987-01-01', periods=len(x0), freq='D')
     via_series = _quiet(attribution.attrdl, pd.Series(x0, index=idx), chi.cb, pd.Series(c0.astype(np.int32), index=idx),
-                        model=ImprovedGLMInterface(chi.coef, chi.vcov), type='af', tot=False, cen=chi.cen,
-                        range=rng)['af']
+                        model=ImprovedGLMInterface(chi.coef, chi.vcov), type='af', dir='forw', tot=False,
+                        cen=chi.cen, range=rng)['af']
     assert np.array_equal(chi.x, x0) and np.array_equal(chi.cases, c0)
     for before, after in ((argvar0, chi.cb.argvar), (arglag0, chi.cb.arglag)):
         assert before.keys() == after.keys()

@@ -69,8 +69,8 @@ def attrdl(x: np.ndarray,
            model: Optional[Any] = None,
            coef: Optional[np.ndarray] = None,
            vcov: Optional[np.ndarray] = None,
-           type: str = "an",
-           dir: str = "forw",
+           type: str = "af",
+           dir: str = "back",
            tot: bool = True,
            cen: Optional[float] = None,
            range: Optional[Tuple[float, float]] = None,
@@ -96,10 +96,12 @@ def attrdl(x: np.ndarray,
     coef, vcov : array-like, optional
         Coefficients and covariance of the basis when ``model`` is not given (log scale). Fewer coefficients
         than basis columns are the reduced (overall-effect) coefficients; only ``dir='forw'`` is possible then.
-    type : {'an', 'af', 'both'}, default 'an'
-        Attributable number or fraction (R has 'an' and 'af'); abbreviations are accepted.
-    dir : {'forw', 'back'}, default 'forw'
-        Forward or backward perspective (R's default is 'back'); abbreviations are accepted.
+    type : {'an', 'af', 'both'}, default 'af'
+        Attributable number or fraction (R has 'an' and 'af', default 'af'); abbreviations are accepted. The result
+        holds the per-observation and total number AND fraction whichever is asked for.
+    dir : {'back', 'forw'}, default 'back'
+        Backward or forward perspective (R's default is 'back'; the Lancet 2015 script uses 'forw'); abbreviations are
+        accepted. Reduced (overall-effect) coefficients allow only 'forw', as in R.
     tot : bool, default True
         Also compute the total attributable number/fraction.
     cen : float, optional
@@ -285,7 +287,8 @@ def attr_heat_cold(x: np.ndarray,
                    sim: bool = False,
                    nsim: int = 5000,
                    split: str = "cen",
-                   name: Optional[str] = None) -> Dict:
+                   name: Optional[str] = None,
+                   dir: str = "forw") -> Dict:
     """
     Heat and cold attributable risks.
 
@@ -293,7 +296,9 @@ def attr_heat_cold(x: np.ndarray,
     (R's ``range=c(-Inf, cen)`` and ``range=c(cen, Inf)``), so that cold + heat is the total. With
     ``split='percentile'`` they are the tails below/above the ``percentiles`` of ``x`` (computed ignoring NaN).
     ``cen`` defaults to the value stored in the basis, else the minimum-risk exposure searched on the percentiles 1-99
-    of ``x`` (Lancet 2015 scripts). ``name`` is the name of the cross-basis in ``model`` (see ``attrdl``).
+    of ``x`` (Lancet 2015 scripts). ``name`` is the name of the cross-basis in ``model`` (see ``attrdl``). ``dir`` is the
+    perspective, 'forw' here as in the Lancet script (attrdl's own default is R's 'back', which needs the full
+    cross-basis coefficients).
     """
     split = _match_arg(split, ("cen", "percentile"), "split")
     x = asfloat(x)                      # masked / nullable cells are NaN (R's NA)
@@ -304,9 +309,9 @@ def attr_heat_cold(x: np.ndarray,
     else:
         cold_threshold, heat_threshold = np.nanpercentile(x, percentiles)
 
-    cold_results = attrdl(x, basis, cases, model, coef, vcov, type="both",
+    cold_results = attrdl(x, basis, cases, model, coef, vcov, type="both", dir=dir,
                           range=(-np.inf, cold_threshold), cen=cen, sim=sim, nsim=nsim, name=name)
-    heat_results = attrdl(x, basis, cases, model, coef, vcov, type="both",
+    heat_results = attrdl(x, basis, cases, model, coef, vcov, type="both", dir=dir,
                           range=(heat_threshold, np.inf), cen=cen, sim=sim, nsim=nsim, name=name)
 
     return {
@@ -341,14 +346,16 @@ def attr_by_percentiles(x: np.ndarray,
                         cen: Optional[float] = None,
                         sim: bool = False,
                         nsim: int = 5000,
-                        name: Optional[str] = None) -> Dict:
+                        name: Optional[str] = None,
+                        dir: str = "forw") -> Dict:
     """
     Attributable risks by percentile bins of the exposure.
 
     Each bin is ``[p_low, p_high)`` of the percentiles of ``x`` (computed ignoring NaN), closed on the right for
     a bin ending at the 100th percentile, so that contiguous bins count every observation once.
     ``cen`` defaults to the value stored in the basis, else the minimum-risk exposure searched on the percentiles 1-99
-    of ``x`` (Lancet 2015 scripts). ``name`` is the name of the cross-basis in ``model`` (see ``attrdl``).
+    of ``x`` (Lancet 2015 scripts). ``name`` is the name of the cross-basis in ``model`` (see ``attrdl``). ``dir`` is the
+    perspective, 'forw' here as in the Lancet script (attrdl's own default is R's 'back').
     """
     if percentile_ranges is None:
         percentile_ranges = [(0, 1), (1, 5), (5, 10), (90, 95), (95, 99), (99, 100)]
@@ -360,7 +367,7 @@ def attr_by_percentiles(x: np.ndarray,
     for low_pct, high_pct in percentile_ranges:
         low_threshold, high_threshold = np.nanpercentile(x, [low_pct, high_pct])
         upper = high_threshold if high_pct >= 100 else np.nextafter(high_threshold, -np.inf)
-        range_results = attrdl(x, basis, cases, model, coef, vcov, type="both",
+        range_results = attrdl(x, basis, cases, model, coef, vcov, type="both", dir=dir,
                                range=(low_threshold, upper), cen=cen, sim=sim, nsim=nsim, name=name)
         results[f"pct_{low_pct}_{high_pct}"] = {
             'percentiles': (low_pct, high_pct),
@@ -420,8 +427,9 @@ class AttributionManager:
         return self._mmt_cache
 
     def total_attribution(self, **kwargs) -> Dict:
-        """Calculate total attributable risk"""
+        """Calculate total attributable risk (forward perspective unless ``dir`` is given, like the other methods)"""
         kwargs.setdefault('name', self.name)
+        kwargs.setdefault('dir', 'forw')
         return attrdl(self.x, self.basis, self.cases,
                      self.model, self.coef, self.vcov, **kwargs)
 
