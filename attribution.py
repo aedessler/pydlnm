@@ -23,7 +23,7 @@ from basis import CrossBasis, OneBasis
 from prediction import mkxpred
 from centering import find_mmt
 from model_utils import validate_model_compatibility
-from utils import asfloat, lagmatrix, seqlag
+from utils import asfloat, lagmatrix, quantile7, seqlag
 
 
 def _match_arg(value: Any, choices: Tuple[str, ...], name: str) -> str:
@@ -256,12 +256,21 @@ def _simulate_totals(x_all: np.ndarray, cases: np.ndarray, den: float, coef: np.
     return {'af_total': af_sim, 'an_total': af_sim * den}
 
 
-def _resolve_wrapper_cen(cen, basis, model, coef, vcov, name=None) -> float:
-    """Centering of the wrappers: given, stored in the basis, else the minimum-risk exposure (MMT)."""
+def _mmt_grid(x) -> np.ndarray:
+    """Search grid of the minimum-risk exposure in the project's R scripts (Gasparrini et al. 2015, 02.secondstage.R):
+    ``quantile(x, 1:99/100)``, the percentiles 1-99 of the observed exposure, which leaves out the very low and the very
+    hot tail (R: type-7 quantiles, NA ignored)."""
+    x = asfloat(x).ravel()
+    return quantile7(x[~np.isnan(x)], np.arange(1, 100) / 100)
+
+
+def _resolve_wrapper_cen(cen, basis, model, coef, vcov, name=None, x=None) -> float:
+    """Centering of the wrappers: given, stored in the basis, else the minimum-risk exposure (MMT), searched on the
+    percentiles 1-99 of ``x`` as in the Lancet 2015 scripts (R's attrdl has no default: it requires ``cen``)."""
     if cen is None:
         cen = basis.argvar.get('cen')
     if cen is None:
-        cen = find_mmt(basis, model, coef=coef, vcov=vcov, name=name)['mmt']
+        cen = find_mmt(basis, model, coef=coef, vcov=vcov, name=name, at=_mmt_grid(x))['mmt']
     return float(cen)
 
 
@@ -283,12 +292,12 @@ def attr_heat_cold(x: np.ndarray,
     With ``split='cen'`` (default) cold is the exposure below the centering value and heat the exposure above it
     (R's ``range=c(-Inf, cen)`` and ``range=c(cen, Inf)``), so that cold + heat is the total. With
     ``split='percentile'`` they are the tails below/above the ``percentiles`` of ``x`` (computed ignoring NaN).
-    ``cen`` defaults to the value stored in the basis, else the minimum-risk exposure. ``name`` is the name of the
-    cross-basis in ``model`` (see ``attrdl``).
+    ``cen`` defaults to the value stored in the basis, else the minimum-risk exposure searched on the percentiles 1-99
+    of ``x`` (Lancet 2015 scripts). ``name`` is the name of the cross-basis in ``model`` (see ``attrdl``).
     """
     split = _match_arg(split, ("cen", "percentile"), "split")
     x = asfloat(x)                      # masked / nullable cells are NaN (R's NA)
-    cen = _resolve_wrapper_cen(cen, basis, model, coef, vcov, name)
+    cen = _resolve_wrapper_cen(cen, basis, model, coef, vcov, name, x)
 
     if split == "cen":
         cold_threshold = heat_threshold = cen
@@ -338,14 +347,14 @@ def attr_by_percentiles(x: np.ndarray,
 
     Each bin is ``[p_low, p_high)`` of the percentiles of ``x`` (computed ignoring NaN), closed on the right for
     a bin ending at the 100th percentile, so that contiguous bins count every observation once.
-    ``cen`` defaults to the value stored in the basis, else the minimum-risk exposure. ``name`` is the name of the
-    cross-basis in ``model`` (see ``attrdl``).
+    ``cen`` defaults to the value stored in the basis, else the minimum-risk exposure searched on the percentiles 1-99
+    of ``x`` (Lancet 2015 scripts). ``name`` is the name of the cross-basis in ``model`` (see ``attrdl``).
     """
     if percentile_ranges is None:
         percentile_ranges = [(0, 1), (1, 5), (5, 10), (90, 95), (95, 99), (99, 100)]
 
     x = asfloat(x)                      # masked / nullable cells are NaN (R's NA)
-    cen = _resolve_wrapper_cen(cen, basis, model, coef, vcov, name)
+    cen = _resolve_wrapper_cen(cen, basis, model, coef, vcov, name, x)
     results = {}
 
     for low_pct, high_pct in percentile_ranges:
@@ -405,7 +414,8 @@ class AttributionManager:
     def get_mmt(self) -> float:
         """Get MMT with caching"""
         if self._mmt_cache is None:
-            mmt_result = find_mmt(self.basis, self.model, coef=self.coef, vcov=self.vcov, name=self.name)
+            mmt_result = find_mmt(self.basis, self.model, coef=self.coef, vcov=self.vcov, name=self.name,
+                                  at=_mmt_grid(self.x))
             self._mmt_cache = mmt_result['mmt']
         return self._mmt_cache
 

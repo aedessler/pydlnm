@@ -122,7 +122,9 @@ def find_mmt(basis: CrossBasis,
     vcov : array-like, optional
         Variance-covariance matrix (if model not provided)
     at : array-like, optional
-        Values to search over for MMT
+        Values to search over for MMT. Default: the prediction grid of ``crosspred`` (R's ``mkat``) over the whole
+        exposure range, extremes included; the project's R scripts search ``quantile(x, 1:99/100)`` instead (what
+        ``attr_heat_cold``, ``attr_by_percentiles`` and ``AttributionManager`` pass when ``cen`` is not given)
     from_val : float, optional
         Starting value for search range
     to_val : float, optional
