@@ -240,6 +240,31 @@ def locate_block(names: Optional[Sequence[str]], n_coef: int, basis_ncol: int, k
                      f"coefficients: {advice}")
 
 
+def aliased_columns(design: Any, tol: float = 1e-11) -> np.ndarray:
+    """Columns of a design matrix that R's ``lm()`` / ``glm()`` report with an NA coefficient (aliased columns).
+
+    R's LINPACK QR (``dqrdc2``, ``tol = 1e-11``) takes the columns in order and declares a column aliased when, after the
+    part explained by the columns before it is removed, its norm is below ``tol`` times its own norm. The same rule is
+    applied here with Gram-Schmidt (done twice for stability). statsmodels solves a rank-deficient design with a
+    pseudo-inverse and returns finite numbers for such columns, so the NA has to be recovered from the design.
+    """
+    X = np.asarray(design, dtype=float)
+    basis = np.empty((X.shape[0], 0))
+    aliased = []
+    for j in range(X.shape[1]):
+        v = X[:, j].copy()
+        norm0 = np.linalg.norm(v)
+        for _ in range(2):
+            if basis.shape[1]:
+                v -= basis @ (basis.T @ v)
+        norm = np.linalg.norm(v)
+        if norm0 == 0.0 or norm < tol * norm0:
+            aliased.append(j)
+        else:
+            basis = np.column_stack([basis, v / norm])
+    return np.asarray(aliased, dtype=int)
+
+
 def basis_block(model: Any, n_coef: int, basis_ncol: int, kind: str = 'cb',
                 basis_name: str = 'basis', basis: Any = None, name: Optional[str] = None) -> np.ndarray:
     """
@@ -549,10 +574,21 @@ def validate_model_compatibility(model: Any,
         raise ValueError(f"variance-covariance matrix has shape {vcov.shape} but the model has {len(coef)} coefficients")
     
     idx = basis_block(model, len(coef), basis_ncol, kind, basis_name, basis=basis, name=name)
+    block_coef, block_vcov = coef[idx].copy(), vcov[np.ix_(idx, idx)].copy()
+    
+    # R gives an aliased (rank-deficient) coefficient of the block the value NA, and crosspred / crossreduce then stop;
+    # a model that solves a rank-deficient design with a pseudo-inverse (statsmodels) must not hide it. An aliased
+    # column outside the block does not matter, as in R.
+    design = model_design(model, len(coef))
+    if design is not None:
+        aliased = np.flatnonzero(np.isin(idx, aliased_columns(design)))
+        block_coef[aliased] = np.nan
+        block_vcov[aliased, :] = np.nan
+        block_vcov[:, aliased] = np.nan
     
     return {
-        'coef': coef[idx],
-        'vcov': vcov[np.ix_(idx, idx)],
+        'coef': block_coef,
+        'vcov': block_vcov,
         'link': link,
         'class': model_class
     }
