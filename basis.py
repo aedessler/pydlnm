@@ -7,6 +7,7 @@ of the distributed lag non-linear modeling framework.
 
 import inspect
 import numpy as np
+import pandas as pd
 from typing import Union, Optional, Dict, Any, Callable, List, Tuple
 import warnings
 
@@ -429,17 +430,22 @@ class CrossBasis:
         # Groups (independent series stacked in x): lags are computed inside each group (R: checkgroup, Lag)
         self.group = None
         self._group_labels = None
+        self._group_codes = None
         if group is not None:
-            group = np.asarray(group)
             if self.x.shape[1] > 1:
                 raise ValueError("'group' allowed only for time series data")
-            if len(group) != self.x.shape[0]:
+            # one code per distinct label, -1 for a missing label (NaN, None, pd.NA), which R also allows
+            codes, uniques = pd.factorize(group)
+            if len(codes) != self.x.shape[0]:
                 raise ValueError("'group' must have one value per observation")
-            counts = np.unique(group, return_counts=True)[1]
-            if counts.min() <= int(np.diff(self.lag)[0]):
+            # R: checkgroup() measures the real groups only (tapply leaves the NA label out)
+            counts = np.bincount(codes[codes >= 0], minlength=len(uniques))
+            if len(counts) and counts.min() <= int(np.diff(self.lag)[0]):
                 raise ValueError("each group must have length > diff(lag) (see 'group')")
-            self._group_labels = group
-            self.group = len(counts)           # R stores length(unique(group)) as attr(, "group")
+            self._group_labels = np.asarray(group)
+            self._group_codes = codes
+            # R stores length(unique(group)) as attr(, "group"): a missing label counts as one more group
+            self.group = len(uniques) + int((codes < 0).any())
         
         # Create the cross-basis
         self._create_cross_basis()
@@ -523,12 +529,12 @@ class CrossBasis:
         self.basis = np.full((n_obs, n_var_basis * n_lag_basis), np.nan)
         for v in range(n_var_basis):
             column = r_var_basis[:, v]
-            if self._group_labels is None:
+            if self._group_codes is None:
                 lag_matrix = self._create_lagged_matrix(column, lag_seq)
             else:
-                lag_matrix = np.full((n_obs, n_lags), np.nan)
-                for label in np.unique(self._group_labels):
-                    rows = np.flatnonzero(self._group_labels == label)
+                lag_matrix = np.full((n_obs, n_lags), np.nan)      # a row with a missing group label stays NaN (R)
+                for code in range(int(self._group_codes.max()) + 1):
+                    rows = np.flatnonzero(self._group_codes == code)
                     lag_matrix[rows] = self._create_lagged_matrix(column[rows], lag_seq)
             # NaN propagates through the product, as in R's mat %*% basislag
             self.basis[:, v * n_lag_basis:(v + 1) * n_lag_basis] = lag_matrix @ r_lag_basis
