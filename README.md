@@ -89,6 +89,13 @@ The audit compared the Python code with R's `dlnm`/`mvmeta` line by line and wit
 - **`MVMeta` control** accepts the `mixmeta.control()` names next to `mvmeta.control()`'s, as the Europe-2022 script passes them: `igls.inititer` (like `igls.iter`, but `<= 0` means no IGLS iterations), `loglik.iter` (validated; the optimum does not depend on the route), `checkPD` (raises on a within-study covariance with a negative eigenvalue) and `addSlist` (the `S` matrices through `control`; an error if `S` is also given).
 - **`strata(df=)` breaks and the BLUP-based MMT grid** use R's `quantile(type = 7)` arithmetic (`utils.quantile7`), so a break that falls on an observation or an integer lag lands on the same side as in R.
 - **R is not reconfigured by the library any more**: `improved_glm.py`/`rpy2_glm.py` no longer overwrite `R_HOME`, and the spline wrappers no longer write objects into R's global environment.
+- **`attrdl` defaults are R's**: `type='af'`, `dir='back'` (they were `'an'` and `'forw'`; the result holds the number and the fraction whichever `type` is asked for). A call that relied on the old default now gives the backward perspective, and reduced (BLUP) coefficients need `dir='forw'`, as in R. `attr_heat_cold` and `attr_by_percentiles` have a `dir` argument that stays `'forw'` (the Lancet script's perspective), and so does `AttributionManager.total_attribution`.
+- **`attrdl(sub=...)`** builds the lag windows (lagged exposures, forward moving average of the cases) on the full series and only then keeps the rows of `sub`, as the Europe-2022 script does for its sub-periods; it used to cut the series first, which joined separate seasons into one series.
+- **Default MMT of the wrappers**: with `cen` not given, `attr_heat_cold`, `attr_by_percentiles` and `AttributionManager` search the minimum of the overall curve on the percentiles 1-99 of the exposure (`quantile(x, 1:99/100)`, as the Lancet 2015 scripts), not on `find_mmt`'s whole-range grid. R's `attrdl` has no default (it requires `cen`).
+- **Non-integer `df`** reaches R's own arithmetic unchanged for `ns`/`bs`/`ps`/`cr`/`strata` (R rounds `seq(length = )` up, so `df = 4.2` has the columns of `df = 5`; mgcv's `cr` fails for some fractions and so does PyDLNM).
+- **`CrossBasis(group=)`** accepts missing group labels as R does (those rows are NA, the other windows stay inside their group), and `recenter_basis` keeps the groups.
+- **`crosspred` with `lag=`** on a `OneBasis` or on reduced coefficients follows R: one identical column per lag, `allfit`/`allse` summed over the integer lags, no `cumul` for a sub-period.
+- **Rank-deficient statsmodels fits**: when a coefficient of the cross-basis block is aliased (R: `NA`), `crosspred`/`crossreduce` now stop as in R instead of predicting from the pseudo-inverse solution. An aliased column outside the block is no problem, as in R.
 
 ## Experimental modules
 
@@ -97,6 +104,7 @@ The audit compared the Python code with R's `dlnm`/`mvmeta` line by line and wit
 ## Known limitations
 
 - **Seasonal df of `ImprovedGLMInterface` assumes a daily series.** It uses the Lancet-2015 rule `dfseas * (number of calendar years)`; a weekly series (Europe 2022) needs `round(dfseas * n_weeks * 7 / 365.25)`. Nothing warns on weekly input, and the packaged route then fits R's model for the daily rule, not the weekly one. For weekly data fit through `Rpy2GLMInterface.fit_glm` with your own `ns(date, df=...)` covariate (this reproduces the Europe first stage exactly; see `tests/test_gap_weekly_data_seasonal_df_rule.py`).
+- **Minor open differences from R** found by the completeness review (no effect on the validated paths) are listed in `tests/README.md` ("Open minor items").
 - **`MVMeta` agrees with R's `mvmeta`/`mixmeta` to about 1e-5**, not to machine precision: R stops its optimiser at `reltol = sqrt(eps)`. Against R run with a tight `reltol` the optimum agrees to 1e-6.
 
 ## Missing values, dates and threads
