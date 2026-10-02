@@ -11,6 +11,7 @@ import pandas as pd
 from typing import Optional, Union, List, Tuple, Dict, Any
 from datetime import datetime, date
 import warnings
+from utils import asfloat, warn_experimental
 
 from basis_functions import SplineBasis, BSplineBasis
 from enhanced_splines import ns_enhanced
@@ -53,6 +54,7 @@ class HarmonicSeasonalBasis(SeasonalBasis):
     
     def __init__(self, n_harmonics: int = 2, period: float = 365.25, 
                  include_trend: bool = False, **kwargs):
+        warn_experimental("HarmonicSeasonalBasis")
         super().__init__(n_harmonics=n_harmonics, period=period, 
                         include_trend=include_trend, **kwargs)
         self.n_harmonics = n_harmonics
@@ -140,6 +142,7 @@ class SeasonalSplineBasis(SeasonalBasis):
     
     def __init__(self, df: int = 4, period: float = 365.25, 
                  cyclic: bool = True, spline_type: str = 'ns', **kwargs):
+        warn_experimental("SeasonalSplineBasis")
         super().__init__(df=df, period=period, cyclic=cyclic, 
                         spline_type=spline_type, **kwargs)
         self.df = df
@@ -254,6 +257,7 @@ class FlexibleSeasonalBasis(SeasonalBasis):
     """
     
     def __init__(self, components: List[Dict], period: float = 365.25, **kwargs):
+        warn_experimental("FlexibleSeasonalBasis")
         super().__init__(components=components, period=period, **kwargs)
         self.components = components
         self.period = period
@@ -378,9 +382,10 @@ def seasonal_decomposition(time_series: np.ndarray,
         Decomposition results including trend, seasonal, and residual components
     """
     
+    warn_experimental("seasonal_decomposition")
     from sklearn.linear_model import LinearRegression
     
-    time_series = np.asarray(time_series)
+    time_series = asfloat(time_series)         # masked / nullable cells are missing values (NaN)
     valid_mask = ~np.isnan(time_series)
     
     if not np.any(valid_mask):
@@ -466,6 +471,7 @@ class SeasonalityManager:
         time_index : array-like or DatetimeIndex
             Time indices for the study period
         """
+        warn_experimental("SeasonalityManager")
         self.time_index = time_index
         self._seasonal_cache = {}
     

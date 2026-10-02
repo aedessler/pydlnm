@@ -11,6 +11,7 @@ from typing import Union, Optional, Dict, Any, Tuple, List
 import warnings
 
 from basis import CrossBasis
+from rbridge import r_session
 
 
 class DLNMGLMInterface:
@@ -43,6 +44,16 @@ class DLNMGLMInterface:
                 "Please install rpy2 with: pip install rpy2"
             )
     
+    @property
+    def family(self) -> Optional[str]:
+        """Family of the fitted R model (None before a fit)"""
+        return None if self.rpy2_interface is None else self.rpy2_interface.family
+    
+    @property
+    def link(self) -> Optional[str]:
+        """Link function of the fitted R model (None before a fit)"""
+        return None if self.rpy2_interface is None else self.rpy2_interface.link
+    
     def fit_glm(self, 
                 y: np.ndarray,
                 family: str = 'quasipoisson',
@@ -57,13 +68,14 @@ class DLNMGLMInterface:
         y : array-like
             Response variable (e.g., mortality counts)
         family : str, default='quasipoisson'
-            GLM family: 'poisson', 'quasipoisson', 'gaussian', 'gamma', 'binomial'
+            GLM family: 'poisson', 'quasipoisson', 'gaussian', 'gamma' (R's ``Gamma``), 'binomial', ...
         other_vars : array-like, optional
             Additional covariates (e.g., seasonality, day of week)
         formula_vars : list of str, optional
             Names for other variables (for easier interpretation)
         **kwargs
-            Additional arguments passed to R's glm()
+            Arguments passed to R's glm(): ``weights``, ``offset``, ``subset`` and ``control`` (see
+            ``Rpy2GLMInterface.fit_glm``); any other keyword raises TypeError
             
         Returns
         -------
@@ -93,28 +105,35 @@ class DLNMGLMInterface:
             return None, None
         return self.rpy2_interface.cb_coef, self.rpy2_interface.cb_vcov
     
+    def select_block(self, basis, name: Optional[str] = None, kind: str = 'cb', ncol: Optional[int] = None,
+                     label: str = 'basis') -> Tuple[np.ndarray, np.ndarray]:
+        """Coefficients and variance-covariance matrix of the terms of ``basis`` in the fitted R model: the
+        cross-basis of the interface, or another basis among its covariates (by ``name`` or by its columns; see
+        ``Rpy2GLMInterface.select_block``)."""
+        if self.rpy2_interface is None:
+            raise ValueError("No rpy2 interface available")
+        return self.rpy2_interface.select_block(basis, name=name, kind=kind, ncol=ncol, label=label)
+    
     def predict(self, newdata: Optional[np.ndarray] = None) -> np.ndarray:
         """
-        Make predictions using the fitted R model.
+        Fitted values of the R model (R: ``fitted()``).
         
         Parameters
         ----------
         newdata : array-like, optional
-            New data for prediction. If None, uses original data.
+            New data for prediction (not implemented). If None, the fitted values of the original data are returned.
             
         Returns
         -------
         predictions : np.ndarray
-            Model predictions
+            Fitted values on the response scale, one per input row: NaN for the rows that R excluded
+            (``na.action = na.exclude`` pads them, as R's ``fitted()`` does)
         """
         if self.rpy2_interface is None or self.rpy2_interface.r_model is None:
             raise ValueError("No model has been fitted yet")
         
-        # Use R's predict function via rpy2 interface
         if newdata is None:
-            # Get fitted values from R model
-            fitted_values = self.rpy2_interface.r('fitted(fitted_model)')
-            return np.array(fitted_values)
+            return self.rpy2_interface.fitted()
         else:
             raise NotImplementedError("Prediction with new data not yet implemented")
     
@@ -123,28 +142,32 @@ class DLNMGLMInterface:
         if self.rpy2_interface is None or self.rpy2_interface.r_model is None:
             return "No model fitted yet"
         
-        return str(self.rpy2_interface.get_model_summary())
+        with r_session():                        # printing an R object calls R: serialised, explicit converter
+            return str(self.rpy2_interface.get_model_summary())
     
-    def crossreduce(self, cen: Optional[float] = None, type: str = "overall"):
+    def crossreduce(self, cen: Optional[float] = None, type: str = "overall", **kwargs):
         """
-        Perform crossreduce using R's crossreduce function directly.
+        Reduce the cross-basis of the fitted model (PyDLNM's port of R's ``crossreduce()`` applied to the
+        cross-basis coefficients and variance-covariance matrix of the model).
         
         Parameters
         ----------
         cen : float, optional
             Centering value for reduction
         type : str, default="overall"
-            Type of reduction
+            Type of reduction ("overall", "var", "lag"); an unknown type raises ValueError
+        **kwargs
+            Further arguments of ``crossreduce.crossreduce()``
             
         Returns
         -------
-        dict
-            Reduced coefficients and variance-covariance matrix
+        CrossReduce
+            Reduced coefficients (``coef``) and variance-covariance matrix (``vcov``)
         """
         if self.rpy2_interface is None:
             raise ValueError("No rpy2 interface available")
         
-        return self.rpy2_interface.crossreduce(cen=cen, type=type)
+        return self.rpy2_interface.crossreduce(cen=cen, type=type, **kwargs)
 
 
 def fit_dlnm_model(crossbasis: CrossBasis,
@@ -166,7 +189,8 @@ def fit_dlnm_model(crossbasis: CrossBasis,
     other_vars : array-like, optional
         Additional covariates
     **kwargs
-        Additional arguments passed to fitting method
+        Additional arguments passed to ``DLNMGLMInterface.fit_glm`` (``formula_vars``, ``weights``, ``offset``,
+        ``subset``, ``control``)
         
     Returns
     -------

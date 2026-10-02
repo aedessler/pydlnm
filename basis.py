@@ -5,16 +5,33 @@ This module contains the main OneBasis and CrossBasis classes that form the foun
 of the distributed lag non-linear modeling framework.
 """
 
+import inspect
 import numpy as np
+import pandas as pd
 from typing import Union, Optional, Dict, Any, Callable, List, Tuple
 import warnings
 
 from basis_functions import (
     LinearBasis, PolynomialBasis, SplineBasis, BSplineBasis, 
-    StrataBasis, ThresholdBasis, BaseBasisFunction
+    StrataBasis, ThresholdBasis, IntegerBasis, PSplineBasis, CRSplineBasis, BaseBasisFunction
 )
-from utils import mklag, seqlag
+from utils import asfloat, mklag, seqlag
 from model_utils import validate_model_compatibility
+
+
+def _callable_formals(fun) -> Tuple[set, bool]:
+    """
+    Named arguments of a user-defined basis function and whether it accepts ``**kwargs``.
+
+    Python analogue of R's ``names(formals(fun))``: R never matches ``...`` against an attribute, so the named
+    (non-variadic) parameters are the ones a function "declares". ``x`` is included when present.
+    """
+    try:
+        parameters = list(inspect.signature(fun).parameters.values())
+    except (TypeError, ValueError):
+        return set(), False
+    names = {p.name for p in parameters if p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)}
+    return names, any(p.kind is p.VAR_KEYWORD for p in parameters)
 
 
 class OneBasis:
@@ -33,11 +50,15 @@ class OneBasis:
         Basis function type. Can be:
         - 'lin': Linear basis
         - 'poly': Polynomial basis  
-        - 'ns': Natural spline basis
-        - 'bs': B-spline basis
+        - 'ns': Natural spline basis (no interior knots without ``df`` or ``knots``, as in R)
+        - 'bs': B-spline basis (no interior knots without ``df`` or ``knots``, as in R)
         - 'strata': Stratified/categorical basis
         - 'thr': Threshold basis
-        - Custom function
+        - 'integer': Indicator of each distinct value (or of ``values``)
+        - 'ps': P-spline basis with difference penalty (attribute ``S``)
+        - 'cr': Cubic regression spline basis from mgcv (attribute ``S``, needs the R package mgcv)
+        - Custom function (a callable of ``x``; it receives ``cen`` only if it declares that argument, and the
+          attributes it returns, e.g. on an ndarray subclass, are kept)
     **kwargs
         Additional arguments passed to the basis function
         
@@ -63,16 +84,92 @@ class OneBasis:
         'bs': BSplineBasis,
         'strata': StrataBasis,
         'thr': ThresholdBasis,
+        'integer': IntegerBasis,
+        'ps': PSplineBasis,
+        'cr': CRSplineBasis,
     }
-    
+
+    # Arguments of each built-in function that are recorded as attributes of a fitted basis:
+    # {attribute name: constructor keyword}. R equivalent: names(formals(fun)) matched against
+    # names(attributes(basis)) in crossbasis() and mkXpred().
+    _RESOLVED_ARGS = {
+        'lin':    {'intercept': 'intercept'},
+        'poly':   {'degree': 'degree', 'scale': 'scale', 'intercept': 'intercept'},
+        'ns':     {'knots': 'knots', 'Boundary_knots': 'Boundary_knots', 'intercept': 'intercept'},
+        'bs':     {'degree': 'degree', 'knots': 'knots', 'Boundary_knots': 'Boundary_knots',
+                   'intercept': 'intercept'},
+        'strata': {'df': 'df', 'breaks': 'breaks', 'ref': 'ref', 'intercept': 'intercept'},
+        'thr':    {'thr.value': 'thr_value', 'side': 'side', 'intercept': 'intercept'},
+        'integer': {'values': 'values', 'intercept': 'intercept'},
+        'ps':     {'df': 'df', 'knots': 'knots', 'degree': 'degree', 'intercept': 'intercept', 'fx': 'fx',
+                   'S': 'S', 'diff': 'diff'},
+        'cr':     {'df': 'df', 'knots': 'knots', 'intercept': 'intercept', 'fx': 'fx', 'S': 'S'},
+    }
+
+    # Arguments accepted by each built-in function (R: the formals of lin, poly, ns, bs, strata, thr)
+    _ACCEPTED_ARGS = {
+        'lin':    {'intercept'},
+        'poly':   {'degree', 'scale', 'intercept'},
+        'ns':     {'df', 'knots', 'intercept', 'Boundary_knots'},
+        'bs':     {'df', 'degree', 'knots', 'intercept', 'Boundary_knots'},
+        'strata': {'df', 'breaks', 'ref', 'intercept'},
+        'thr':    {'thr_value', 'side', 'intercept'},
+        'integer': {'values', 'intercept'},
+        'ps':     {'df', 'knots', 'degree', 'intercept', 'fx', 'S', 'diff'},
+        'cr':     {'df', 'knots', 'intercept', 'fx', 'S'},
+    }
+
+    # Attributes holding numeric vectors (returned by resolved_args() as 1-d float arrays)
+    _VECTOR_ARGS = ('knots', 'Boundary_knots', 'breaks', 'thr.value', 'values')
+
+    @classmethod
+    def accepts_argument(cls, fun: Union[str, Callable], name: str) -> bool:
+        """Whether ``name`` is an argument of the basis function (R: ``name %in% names(formals(fun))``)."""
+        if isinstance(fun, str):
+            return name in cls._ACCEPTED_ARGS.get(fun, set())
+        return name in _callable_formals(fun)[0]
+
+    @classmethod
+    def _check_args(cls, fun: str, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+        """R's checkonebasis(): accept R's dotted and legacy argument names, reject unused arguments."""
+        kwargs = dict(kwargs)
+
+        def rename(old: str, new: str, message: Optional[str] = None):
+            if old in kwargs:
+                if new in kwargs:
+                    raise TypeError(f"specify only one of '{old}' and '{new}'")
+                kwargs[new] = kwargs.pop(old)
+                if message:
+                    warnings.warn(message)
+
+        rename('Boundary.knots', 'Boundary_knots')
+        rename('thr.value', 'thr_value')
+        if fun in ('ns', 'bs'):
+            rename('bound', 'Boundary_knots', "use the default argument 'Boundary.knots' for fun 'ns'-'bs'")
+        if fun == 'thr':
+            rename('knots', 'thr_value', "argument 'knots' replaced by 'thr.value' in function thr")
+        if fun == 'strata':
+            rename('knots', 'breaks', "argument 'knots' replaced by 'breaks' in function strata")
+        accepted = cls._ACCEPTED_ARGS.get(fun)
+        if accepted is not None:
+            unused = sorted(set(kwargs) - accepted)
+            if unused:
+                raise TypeError(f"OneBasis(fun='{fun}'): unused argument(s) {unused}; accepted: {sorted(accepted)}")
+        return kwargs
+
     def __init__(self, x: Union[np.ndarray, List], fun: Union[str, Callable] = 'ns', **kwargs):
-        # Store original input
-        self.x = np.asarray(x, dtype=float)
+        # Store original input (R: x <- as.vector(x), i.e. a matrix is flattened column by column)
+        # (a masked cell is a missing one: NaN, as R's NA)
+        self.x = asfloat(x).flatten(order='F')
         self.fun = fun
-        self.range = (np.nanmin(self.x), np.nanmax(self.x))
+        # R: range(x, na.rm=TRUE) (c(Inf, -Inf), with a warning, when there is no observed value)
+        observed = self.x[~np.isnan(self.x)]
+        self.range = (observed.min(), observed.max()) if observed.size else (np.inf, -np.inf)
         
         # Extract centering parameter
         self.cen = kwargs.pop('cen', None)
+        if isinstance(fun, str):
+            kwargs = self._check_args(fun, kwargs)
         
         # Generate basis matrix
         self.basis, self.attributes = self._create_basis(**kwargs)
@@ -108,19 +205,27 @@ class OneBasis:
             attributes = basis_func.get_attributes()
             
         elif callable(self.fun):
-            # Use custom function
-            basis = self.fun(self.x, **kwargs)
-            basis = np.asarray(basis)
+            # Use custom function. As in R's checkonebasis(), the centering value is handed to the function only
+            # if the function declares a 'cen' argument.
+            call_kwargs = dict(kwargs)
+            if self.cen is not None and 'cen' in _callable_formals(self.fun)[0]:
+                call_kwargs['cen'] = self.cen
+            raw = self.fun(self.x, **call_kwargs)
+            
+            # R keeps attributes(basis): read them BEFORE np.asarray, which returns a plain ndarray and so drops
+            # the instance attributes of an ndarray subclass returned by the function
+            function_attributes = {k: v for k, v in getattr(raw, '__dict__', {}).items() if k != 'fun'}
+            basis = np.asarray(raw)
             
             # Ensure it's a matrix
             if basis.ndim == 1:
                 basis = basis.reshape(-1, 1)
             
-            # Try to extract attributes from function
+            # The arguments are recorded (R only records what the function itself stores as attributes); the
+            # attributes the function returns take precedence
             attributes = {'fun': self.fun}
-            if hasattr(basis, '__dict__'):
-                attributes.update(getattr(basis, '__dict__', {}))
             attributes.update(kwargs)
+            attributes.update(function_attributes)
             
         else:
             raise TypeError("fun must be a string or callable")
@@ -138,25 +243,56 @@ class OneBasis:
         """Set column names for the basis matrix."""
         n_cols = self.basis.shape[1]
         self.colnames = [f"b{i+1}" for i in range(n_cols)]
-        
+
+    def resolved_args(self) -> Dict[str, Any]:
+        """
+        Arguments that rebuild this basis at new values of x.
+
+        Data-dependent choices made on the training x (interior knots implied by ``df``, boundary knots, strata
+        breaks, the default threshold, the polynomial scale) are returned as their resolved values. This is what
+        R's ``crossbasis()`` stores in ``attr(, "argvar")``/``attr(, "arglag")`` and what ``mkXpred()`` uses for a
+        ``onebasis`` object, so that prediction reproduces the training basis instead of re-deriving it from the
+        prediction values.
+        """
+        if not isinstance(self.fun, str):
+            # R's mkXpred(): "fun" plus the stored attributes that are arguments of the function (range is
+            # bookkeeping; cen is replayed only to a function that declares it). A function that accepts **kwargs
+            # receives every recorded argument.
+            formals, variadic = _callable_formals(self.fun)
+            args = {'fun': self.fun}
+            for name, value in self.attributes.items():
+                if name in ('fun', 'range', 'x') or value is None:
+                    continue
+                if name in formals or (variadic and name != 'cen'):
+                    args[name] = value
+            return args
+        args = {'fun': self.fun}
+        for attr, keyword in self._RESOLVED_ARGS[self.fun].items():
+            if self.attributes.get(attr) is not None:
+                value = self.attributes[attr]
+                if attr in self._VECTOR_ARGS:
+                    value = np.atleast_1d(asfloat(value))
+                args[keyword] = value
+        return args
+
     def __array__(self) -> np.ndarray:
         """Return the basis matrix when converted to array."""
         return self.basis
-    
+
     def __getitem__(self, key):
         """Allow indexing of the basis matrix."""
         return self.basis[key]
-    
+
     @property
     def shape(self) -> Tuple[int, int]:
         """Return the shape of the basis matrix."""
         return self.basis.shape
-    
+
     @property
     def ndim(self) -> int:
         """Return the number of dimensions (always 2)."""
         return 2
-    
+
     def summary(self) -> str:
         """
         Return a summary of the OneBasis object.
@@ -174,11 +310,12 @@ class OneBasis:
         ]
         
         # Add key attributes
-        if 'df' in self.attributes:
-            summary_lines.append(f"Degrees of freedom: {self.attributes['df']}")
+        # As R's summary.onebasis: df is ncol(object), the number of columns actually produced (the 'df' argument is
+        # only a request, and is ignored when knots are given)
+        summary_lines.append(f"Degrees of freedom: {self.shape[1]}")
         if 'degree' in self.attributes:
             summary_lines.append(f"Degree: {self.attributes['degree']}")
-        if 'knots' in self.attributes and len(self.attributes['knots']) > 0:
+        if self.fun in ('ns', 'bs') and 'knots' in self.attributes and len(self.attributes['knots']) > 0:
             knots = self.attributes['knots']
             summary_lines.append(f"Knots: {len(knots)} interior knots")
         
@@ -242,7 +379,7 @@ class CrossBasis:
                  **kwargs):
         
         # Convert x to matrix
-        self.x = np.asarray(x, dtype=float)
+        self.x = asfloat(x)                        # a masked cell is a missing one: NaN, as R's NA
         if self.x.ndim == 1:
             self.x = self.x.reshape(-1, 1)
         
@@ -259,42 +396,56 @@ class CrossBasis:
                 f"1 (time series) or {expected_cols} (lag matrix) columns"
             )
         
-        # Set default arguments
-        self.argvar = argvar or {}
-        self.arglag = arglag or {}
+        # Set default arguments. Work on copies: the resolved arguments recorded below (and the defaults injected
+        # here) belong to THIS x, so they must not leak into dicts the caller reuses for another series.
+        self.argvar = dict(argvar) if argvar else {}
+        self.arglag = dict(arglag) if arglag else {}
         
-        # Set default lag arguments to EXACTLY match R DLNM defaults
+        # R checkcrossbasis(): the old argument 'type' is 'fun'; the very old usage is not allowed any more
+        old_usage = {'vartype', 'vardf', 'vardegree', 'varknots', 'varbound', 'varint', 'cen', 'cenvalue', 'maxlag',
+                     'lagtype', 'lagdf', 'lagdegree', 'lagknots', 'lagbound', 'lagint'}
+        if kwargs:
+            if set(kwargs) & old_usage:
+                raise TypeError("old usage not allowed any more. See CrossBasis and OneBasis")
+            raise TypeError(f"CrossBasis got unexpected keyword argument(s) {sorted(kwargs)}")
+        for args in (self.argvar, self.arglag):
+            if 'fun' not in args and 'type' in args:
+                args['fun'] = args.pop('type')
+                warnings.warn("argument 'type' replaced by 'fun'. See OneBasis")
+
+        # As R's crossbasis(): strata(df=1, intercept=TRUE) (one unconstrained column, the sum of the exposure
+        # basis over the lags) when arglag is empty or the lag period is a single lag; onebasis()'s default
+        # function ("ns") when arglag has no 'fun'.
         if len(self.arglag) == 0 or np.diff(self.lag)[0] == 0:
-            # R uses natural splines by default for lag dimension with logknots
-            lag_seq = seqlag(self.lag)
-            if len(lag_seq) > 1:
-                # Use proper logknots function matching R exactly
-                from utils import logknots
-                lag_range = [int(min(lag_seq)), int(max(lag_seq))]
-                # Default to 3 knots if lag range > 1 
-                if np.diff(lag_range)[0] > 1:
-                    knots = logknots(lag_range, nk=3)
-                    self.arglag = {'fun': 'ns', 'knots': knots, 'intercept': True}
-                else:
-                    self.arglag = {'fun': 'ns', 'df': 4, 'intercept': True}
-            else:
-                self.arglag = {'fun': 'ns', 'df': 4, 'intercept': True}
-        
-        # Ensure natural splines are used for lag by default (like R)
+            self.arglag = {'fun': 'strata', 'df': 1, 'intercept': True}
         if 'fun' not in self.arglag:
             self.arglag['fun'] = 'ns'
 
-        # intercept/cen injection not applicable for integer lag
-        if self.arglag.get('fun') != 'integer':
-            # Add intercept by default for lag basis if not specified - MATCH R CROSSBASIS DEFAULT
-            if 'intercept' not in self.arglag:
-                self.arglag['intercept'] = True  # R crossbasis uses intercept=TRUE for lag basis by default
-
-            # Force uncentered transformations for lag
-            self.arglag['cen'] = None
+        # As R's crossbasis(): the lag basis has an intercept by default when its function has that argument (every
+        # built-in one, integer included; a callable only if it declares 'intercept'), and is never centred
+        if 'intercept' not in self.arglag and OneBasis.accepts_argument(self.arglag['fun'], 'intercept'):
+            self.arglag['intercept'] = True
+        self.arglag['cen'] = None
         
-        # Store group for potential seasonal analysis
-        self.group = group
+        # Groups (independent series stacked in x): lags are computed inside each group (R: checkgroup, Lag)
+        self.group = None
+        self._group_labels = None
+        self._group_codes = None
+        if group is not None:
+            if self.x.shape[1] > 1:
+                raise ValueError("'group' allowed only for time series data")
+            # one code per distinct label, -1 for a missing label (NaN, None, pd.NA), which R also allows
+            codes, uniques = pd.factorize(group)
+            if len(codes) != self.x.shape[0]:
+                raise ValueError("'group' must have one value per observation")
+            # R: checkgroup() measures the real groups only (tapply leaves the NA label out)
+            counts = np.bincount(codes[codes >= 0], minlength=len(uniques))
+            if len(counts) and counts.min() <= int(np.diff(self.lag)[0]):
+                raise ValueError("each group must have length > diff(lag) (see 'group')")
+            self._group_labels = np.asarray(group)
+            self._group_codes = codes
+            # R stores length(unique(group)) as attr(, "group"): a missing label counts as one more group
+            self.group = len(uniques) + int((codes < 0).any())
         
         # Create the cross-basis
         self._create_cross_basis()
@@ -306,35 +457,32 @@ class CrossBasis:
     def _create_cross_basis(self):
         """Create the cross-basis matrix using tensor products."""
         
+        # R: modifyList(argvar, list(x = as.numeric(x))) / modifyList(arglag, list(x = seqlag(lag))): an 'x' entry in
+        # argvar / arglag is overridden, never used
+        self.argvar.pop('x', None)
+        self.arglag.pop('x', None)
+
         # Create exposure basis (var dimension)
-        if self.x.shape[1] == 1:
-            # Time series: use the single column
-            x_var = self.x.flatten()
-        else:
-            # Matrix: use all values for basis (flattened approach)
-            x_var = self.x.flatten()
+        # R: basisvar <- onebasis(as.numeric(x)), column-major also for a matrix of lagged occurrences
+        x_var = self.x.flatten(order='F')
         
         # Create OneBasis for exposure dimension
         self.basisvar = OneBasis(x_var, **self.argvar)
 
-        # Store training boundary knots so prediction at out-of-range temperatures
-        # uses the same boundary knots as training, matching R's crossbasis/mkXpred.
-        if self.argvar.get('fun') == 'bs' and 'Boundary_knots' not in self.argvar:
-            x_clean = x_var[~np.isnan(x_var)]
-            self.argvar['Boundary_knots'] = np.array([x_clean.min(), x_clean.max()])
+        # Redefine argvar from the attributes of the fitted basis, as R's crossbasis() does ("they might have been
+        # changed by onebasis"): knots implied by df, Boundary.knots, poly scale, strata breaks and the default
+        # threshold are frozen at their training values, so crosspred/crossreduce/recentering rebuild the identical
+        # basis at new x (incl. out-of-range x). The centering value, if any, is kept.
+        cen = self.argvar.get('cen')
+        self.argvar = self.basisvar.resolved_args()
+        if cen is not None:
+            self.argvar['cen'] = cen
 
         # Create lag basis
         lag_seq = seqlag(self.lag)
-        if self.arglag.get('fun') == 'integer':
-            # Each lag is independent; lag basis is the identity matrix
-            n_lags = len(lag_seq)
-            _identity = np.eye(n_lags)
-            self.basislag = type('_IntegerLagBasis', (), {
-                'basis': _identity, 'shape': (n_lags, n_lags), 'fun': 'integer'
-            })()
-        else:
-            self.basislag = OneBasis(lag_seq, **self.arglag)
-        
+        self.basislag = OneBasis(lag_seq, **self.arglag)
+        self.arglag = self.basislag.resolved_args()   # same redefinition for the lag basis (integer: values, intercept)
+
         # Store degrees of freedom
         self.df = (self.basisvar.shape[1], self.basislag.shape[1])
         
@@ -366,156 +514,40 @@ class CrossBasis:
         """
         lag_seq = seqlag(self.lag)
         n_obs = self.x.shape[0]
-        exposure_values = self.x.flatten()
-        max_lag = int(np.max(lag_seq))
-        
-        # Initialize crossbasis matrix with NaN
-        self.basis = np.full((n_obs, n_var_basis * n_lag_basis), np.nan)
-        
-        # Create variable and lag basis functions using R for exact matching
-        import os
-        os.environ['R_HOME'] = '/Library/Frameworks/R.framework/Resources'
-        import rpy2.robjects as robjects
-        from rpy2.robjects import numpy2ri
-        from rpy2.robjects.conversion import localconverter
-        
-        # Create variable basis using R
-        var_fun = self.argvar.get('fun', 'bs')
-        with localconverter(robjects.default_converter + numpy2ri.converter):
-            robjects.globalenv['temp_data'] = exposure_values
-
-            # Store boundary knots from training data if not already set
-            if 'Boundary_knots' not in self.argvar:
-                x_clean = exposure_values[~np.isnan(exposure_values)]
-                self.argvar['Boundary_knots'] = np.array([x_clean.min(), x_clean.max()])
-            robjects.globalenv['bk_vals'] = self.argvar['Boundary_knots']
-
-            if var_fun == 'ns':
-                if 'knots' in self.argvar:
-                    robjects.globalenv['var_knots'] = self.argvar['knots']
-                    robjects.r('var_basis <- ns(temp_data, knots=var_knots, Boundary.knots=bk_vals)')
-                else:
-                    df = self.argvar.get('df', 4)
-                    robjects.r(f'var_basis <- ns(temp_data, df={df}, Boundary.knots=bk_vals)')
-            else:  # bs (default)
-                if 'knots' in self.argvar:
-                    robjects.globalenv['var_knots'] = self.argvar['knots']
-                    degree = self.argvar.get('degree', 3)
-                    robjects.r(f'var_basis <- bs(temp_data, knots=var_knots, degree={degree}, Boundary.knots=bk_vals)')
-                else:
-                    df = self.argvar.get('df', 3)
-                    degree = self.argvar.get('degree', 3)
-                    robjects.r(f'var_basis <- bs(temp_data, df={df}, degree={degree}, Boundary.knots=bk_vals)')
-
-            r_var_basis = np.array(robjects.r('var_basis'))
-
-        # Create lag basis — identity for integer lags, otherwise ns via R
-        lag_fun = self.arglag.get('fun', 'ns')
-        if lag_fun == 'integer':
-            r_lag_basis = np.eye(len(lag_seq))
-        else:
-            with localconverter(robjects.default_converter + numpy2ri.converter):
-                lag_values = np.array(lag_seq, dtype=float)
-                robjects.globalenv['lag_seq'] = lag_values
-
-                if 'knots' in self.arglag:
-                    robjects.globalenv['lag_knots'] = self.arglag['knots']
-                    intercept = self.arglag.get('intercept', True)
-                    robjects.r(f'lag_basis <- ns(lag_seq, knots=lag_knots, intercept={str(intercept).upper()})')
-                else:
-                    df = self.arglag.get('df', 4)
-                    intercept = self.arglag.get('intercept', True)
-                    robjects.r(f'lag_basis <- ns(lag_seq, df={df}, intercept={str(intercept).upper()})')
-
-                r_lag_basis = np.array(robjects.r('lag_basis'))
-        
-        # Build the cross-basis using vectorized matrix multiplications.
-        # For each variable basis column v:
-        #   1. Build a lagged matrix L where L[i, t] = r_var_basis[i-t, v]
-        #   2. CB[:, v*n_lag_basis:(v+1)*n_lag_basis] = L @ r_lag_basis
-        # This replaces the O(n_obs * n_var * n_lag_basis * n_lags) Python loop
-        # with n_var numpy matmuls.
         n_lags = len(lag_seq)
+        if np.max(np.abs(lag_seq)) >= n_obs:
+            raise ValueError("largest lag must be less than the number of observations")
+        
+        # As R's crossbasis(), the exposure and lag bases are the onebasis() objects built in
+        # _create_cross_basis() from argvar/arglag, so every function (lin, poly, ns, bs, strata, thr, integer, a
+        # callable) and every argument (df, knots, degree, intercept, ...) is honoured in both dimensions.
+        r_var_basis = np.asarray(self.basisvar.basis, dtype=float)
+        r_lag_basis = np.asarray(self.basislag.basis, dtype=float)
+        
+        # For each exposure-basis column v: the matrix of lagged occurrences (R: tsModel::Lag, computed inside each
+        # group when there are groups; NaN where there is no history or future), then one column per lag-basis column.
+        self.basis = np.full((n_obs, n_var_basis * n_lag_basis), np.nan)
         for v in range(n_var_basis):
-            lag_matrix = np.full((n_obs, n_lags), np.nan)
-            for t_idx, lag_time in enumerate(lag_seq):
-                t_int = int(lag_time)
-                if t_int == 0:
-                    lag_matrix[:, t_idx] = r_var_basis[:, v]
-                elif t_int > 0:
-                    lag_matrix[t_int:, t_idx] = r_var_basis[:-t_int, v]
-            # (n_obs, n_lags) @ (n_lags, n_lag_basis) → (n_obs, n_lag_basis)
-            # NaN rows propagate automatically through np.dot when any lag is NaN
+            column = r_var_basis[:, v]
+            if self._group_codes is None:
+                lag_matrix = self._create_lagged_matrix(column, lag_seq)
+            else:
+                lag_matrix = np.full((n_obs, n_lags), np.nan)      # a row with a missing group label stays NaN (R)
+                for code in range(int(self._group_codes.max()) + 1):
+                    rows = np.flatnonzero(self._group_codes == code)
+                    lag_matrix[rows] = self._create_lagged_matrix(column[rows], lag_seq)
+            # NaN propagates through the product, as in R's mat %*% basislag
             self.basis[:, v * n_lag_basis:(v + 1) * n_lag_basis] = lag_matrix @ r_lag_basis
-
-        # R dlnm behavior: Set entire first max_lag rows to NaN
-        # This is because for observations 0 to max_lag-1, we don't have complete
-        # exposure history to compute the distributed lag effect
-        if max_lag > 0:
-            self.basis[:max_lag, :] = np.nan
-    
-    def _evaluate_var_basis_at_lag(self, lagged_values: np.ndarray, basis_idx: int) -> np.ndarray:
-        """
-        Evaluate the variable basis function at lagged exposure values.
-        
-        This recreates the variable basis transformation for the given lagged values
-        and returns the basis_idx-th column. NaN values are preserved.
-        """
-        # Check for NaN values and preserve them
-        nan_mask = np.isnan(lagged_values)
-        result = np.full_like(lagged_values, np.nan)
-        
-        if np.all(nan_mask):
-            # All values are NaN, return all NaN
-            return result
-        
-        try:
-            # Recreate the variable basis function with same parameters
-            var_basis_func_class = OneBasis._FUNCTION_MAP.get(self.argvar.get('fun', 'ns'))
-            if var_basis_func_class is None:
-                # Fallback to using precomputed values
-                if basis_idx < self.basisvar.basis.shape[1]:
-                    return self.basisvar.basis[:, basis_idx]
-                else:
-                    return np.full(len(lagged_values), np.nan)
-            
-            # Create temporary basis function with same parameters
-            temp_func = var_basis_func_class(**self.argvar)
-            temp_basis = temp_func(lagged_values)
-            
-            # Return the requested basis column
-            if basis_idx < temp_basis.shape[1]:
-                result = temp_basis[:, basis_idx]
-            else:
-                result = np.full(len(lagged_values), np.nan)
-                
-            # Ensure NaN values are preserved
-            result[nan_mask] = np.nan
-            return result
-                
-        except Exception:
-            # Fallback: preserve NaN pattern
-            if basis_idx < self.basisvar.basis.shape[1]:
-                result = np.full_like(lagged_values, self.basisvar.basis[0, basis_idx])
-                result[nan_mask] = np.nan
-                return result
-            else:
-                return np.full(len(lagged_values), np.nan)
     
     def _create_matrix_basis(self, n_var_basis: int, n_lag_basis: int):
-        """Create cross-basis for matrix data."""
-        n_obs = self.x.shape[0]
-        
-        # For matrix input, each row of x represents lagged exposures
+        """Cross-basis for a matrix of lagged occurrences (rows = observations, columns = lags), as R."""
+        n_obs, n_lags = self.x.shape
+        lag_basis = np.asarray(self.basislag.basis, dtype=float)
+        self.basis = np.zeros((n_obs, n_var_basis * n_lag_basis))
         for v in range(n_var_basis):
-            # Create matrix where each row has the same basis function value
-            var_basis_values = self.basisvar.basis[v::n_obs, v] if len(self.basisvar.basis) > n_obs else np.full(n_obs, self.basisvar.basis[0, v])
-            var_matrix = np.tile(var_basis_values.reshape(-1, 1), (1, self.x.shape[1]))
-            
-            # Apply lag basis functions
-            for l in range(n_lag_basis):
-                col_idx = n_lag_basis * v + l
-                self.basis[:, col_idx] = (var_matrix * self.x) @ self.basislag.basis[:, l]
+            # the basis was evaluated on as.numeric(x): undo the column-major flatten
+            mat = np.asarray(self.basisvar.basis, dtype=float)[:, v].reshape((n_obs, n_lags), order='F')
+            self.basis[:, v * n_lag_basis:(v + 1) * n_lag_basis] = mat @ lag_basis
     
     def _create_lagged_matrix(self, values: np.ndarray, lag_seq: np.ndarray) -> np.ndarray:
         """
@@ -611,3 +643,12 @@ class CrossBasis:
     
     def __str__(self) -> str:
         return self.summary()
+
+def onebasis(x, fun: str = "ns", **kwargs) -> OneBasis:
+    """Functional form of OneBasis, like R's ``onebasis(x, fun, ...)``."""
+    return OneBasis(x, fun=fun, **kwargs)
+
+
+def crossbasis(x, lag=None, argvar=None, arglag=None, group=None, **kwargs) -> CrossBasis:
+    """Functional form of CrossBasis, like R's ``crossbasis(x, lag, argvar, arglag, group)``."""
+    return CrossBasis(x, lag=lag, argvar=argvar, arglag=arglag, group=group, **kwargs)

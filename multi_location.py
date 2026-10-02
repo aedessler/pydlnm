@@ -12,8 +12,57 @@ import warnings
 
 from improved_glm import fit_enhanced_dlnm_model
 from meta_analysis import mvmeta, blup
-from basis import CrossBasis
+from basis import CrossBasis, OneBasis
 from centering import find_mmt_blup
+from utils import asfloat
+
+
+def _mmt_from_blup(x: np.ndarray, blup_coef: np.ndarray, argvar: Dict[str, Any],
+                   percentile_range: Tuple[int, int] = (1, 99)) -> Dict[str, Any]:
+    """
+    Minimum mortality temperature of a region from its BLUP (02.secondstage.R, "RE-CENTERING").
+    
+    R rebuilds the variable basis of the first stage on the percentiles of the region's exposure,
+    ``bvar <- onebasis(quantile(x, 1:99/100), fun = varfun, knots = quantile(x, varper/100), degree = vardegree,
+    Boundary.knots = range(x))``, and takes ``minperccity <- (1:99)[which.min(bvar %*% blup)]``. Here the basis is
+    built from the resolved specification of the first-stage variable basis (``CrossBasis.argvar``: function, knots,
+    degree, boundary knots, intercept), so that the BLUP coefficients are applied to the very basis they were
+    estimated for, whatever its function and number of columns.
+    
+    Raises
+    ------
+    ValueError
+        If the number of BLUP coefficients differs from the number of columns of the basis (R: non-conformable
+        arguments), or the risks are all NaN (R: ``which.min`` gives ``integer(0)``).
+    """
+    x = asfloat(x).ravel()
+    x = x[~np.isnan(x)]
+    blup_coef = asfloat(blup_coef).ravel()
+    
+    percentiles = np.arange(percentile_range[0], percentile_range[1] + 1)
+    predvar = np.percentile(x, percentiles)                     # R: quantile(x, 1:99/100), type 7
+    
+    spec = {key: value for key, value in argvar.items() if key != 'cen'}
+    bvar = OneBasis(predvar, **spec).basis
+    if bvar.shape[1] != len(blup_coef):
+        raise ValueError(f"{len(blup_coef)} BLUP coefficients do not match the {bvar.shape[1]} columns of the "
+                         f"first-stage variable basis")
+    
+    risk_values = bvar @ blup_coef
+    if np.isnan(risk_values).all():
+        raise ValueError("no MMT: the risk values are all NaN (NaN in the BLUP coefficients?)")
+    min_idx = int(np.nanargmin(risk_values))                      # R: which.min
+    
+    return {
+        'mmt': predvar[min_idx],
+        'percentile': int(percentiles[min_idx]),
+        'min_risk': risk_values[min_idx],
+        'risk_range': (np.nanmin(risk_values), np.nanmax(risk_values)),
+        'predvar': predvar,
+        'risk_values': risk_values,
+        'basis_matrix': bvar,
+        'method': 'blup_optimization'
+    }
 
 
 class MultiLocationDLNM:
@@ -48,13 +97,16 @@ class MultiLocationDLNM:
         Parameters
         ----------
         region_name : str
-            Name/identifier for this region
+            Name/identifier for this region; must be unique within the study (results and meta-predictors are
+            reported by name)
         crossbasis : CrossBasis
-            Cross-basis matrix for this region
+            Cross-basis matrix for this region. Its variable basis (function, knots, degree) is what the BLUP
+            coefficients refer to, and is reused to find the region's MMT.
         y : array-like
-            Response variable (mortality counts)
+            Response variable (mortality counts): list, array, Series, NaN allowed
         dates : pd.Series
-            Date series for seasonality
+            Date series for seasonality (Series, DatetimeIndex, datetime64 array, list of dates; numbers such as R
+            Date day numbers are rejected with a ValueError, see ``ImprovedGLMInterface.fit_dlnm_model``)
         dfseas : int, default=8
             Seasonal degrees of freedom per year
         family : str, default='quasipoisson'
@@ -64,9 +116,15 @@ class MultiLocationDLNM:
         -------
         dict
             Individual region analysis results
+        
+        Raises
+        ------
+        ValueError
+            If ``region_name`` was already added
         """
         
-        print(f"Analyzing region: {region_name}")
+        if region_name in self.region_names:
+            raise ValueError(f"region {region_name!r} was already added: region names must be unique")
         
         # Fit enhanced DLNM model for this region
         result = fit_enhanced_dlnm_model(
@@ -90,12 +148,7 @@ class MultiLocationDLNM:
         # Store results
         self.region_results.append(result)
         self.region_names.append(region_name)
-        
-        # Store meta-predictors
-        if region_name not in self.meta_predictors:
-            self.meta_predictors[region_name] = meta_pred
-        
-        print(f"  ✅ Region {region_name}: avg_temp={avg_temp:.1f}°C, range={temp_range:.1f}°C")
+        self.meta_predictors[region_name] = meta_pred
         
         return result
     
@@ -116,8 +169,6 @@ class MultiLocationDLNM:
         if len(self.region_results) < 2:
             raise ValueError("Need at least 2 regions for meta-analysis")
         
-        print(f"Fitting meta-analysis for {len(self.region_results)} regions...")
-        
         # Extract coefficients and variance-covariance matrices
         coef_matrix = []
         vcov_array = []
@@ -129,9 +180,6 @@ class MultiLocationDLNM:
         coef_matrix = np.array(coef_matrix)
         vcov_array = np.array(vcov_array)
         
-        print(f"  - Coefficient matrix shape: {coef_matrix.shape}")
-        print(f"  - Variance-covariance array shape: {vcov_array.shape}")
-        
         # Create meta-predictor design matrix: intercept + avg_temp + temp_range
         n_regions = len(self.region_results)
         X = np.ones((n_regions, 3))  # intercept, avg_temp, temp_range
@@ -140,9 +188,6 @@ class MultiLocationDLNM:
             meta_pred = self.meta_predictors[region_name]
             X[i, 1] = meta_pred['avg_temp']
             X[i, 2] = meta_pred['temp_range']
-        
-        print(f"  - Meta-predictors: avg_temp range [{X[:, 1].min():.1f}, {X[:, 1].max():.1f}]°C")
-        print(f"  - Temperature ranges: [{X[:, 2].min():.1f}, {X[:, 2].max():.1f}]°C")
         
         # Fit multivariate meta-analysis
         self.mv_model = mvmeta(
@@ -153,11 +198,9 @@ class MultiLocationDLNM:
             control=control
         )
         
-        print(f"  ✅ Meta-analysis converged: {self.mv_model.converged}")
-        
-        if self.mv_model.converged:
-            # Display some results
-            print(f"  - Between-study variance (trace): {np.trace(self.mv_model.psi):.6f}")
+        # The fitted values are valid whatever the optimiser's convergence flag says (get_summary reports the flag
+        # alongside)
+        print(f"  - Between-study variance (trace): {np.trace(self.mv_model.psi):.6f}")
         
     def calculate_blups(self, vcov: bool = True) -> List[Dict]:
         """
@@ -179,18 +222,7 @@ class MultiLocationDLNM:
         if self.mv_model is None:
             raise ValueError("Must fit meta-analysis first using fit_meta_analysis()")
         
-        print("Calculating BLUPs...")
-        
         self.blup_results = blup(self.mv_model, vcov=vcov)
-        
-        print(f"  ✅ Generated BLUPs for {len(self.blup_results)} regions")
-        
-        # Show shrinkage information
-        for i, region_name in enumerate(self.region_names):
-            original_coef = self.region_results[i]['reduced']['coefficients']
-            blup_coef = self.blup_results[i]['blup']
-            shrinkage = np.linalg.norm(blup_coef - original_coef)
-            print(f"  - {region_name}: shrinkage = {shrinkage:.6f}")
         
         return self.blup_results
     
@@ -198,68 +230,74 @@ class MultiLocationDLNM:
         """
         Calculate MMTs using BLUP coefficients for each region
         
-        This replicates the R workflow:
+        This replicates the R workflow (02.secondstage.R):
         for(i in seq(length(dlist))) {
-          bvar %*% blup[[i]]$blup
+          bvar <- onebasis(quantile(data$tmean, 1:99/100), fun=varfun, knots=quantile(data$tmean, varper/100),
+                           degree=vardegree, Boundary.knots=range(data$tmean))
+          minperccity[i] <- (1:99)[which.min(bvar %*% blup[[i]]$blup)]
           mintempcity[i] <- quantile(data$tmean, minperccity[i]/100, na.rm=T)
         }
+        minperccountry <- median(minperccity)
+        
+        The basis of the search is the variable basis of the region's first-stage cross-basis (function, knots,
+        degree), as in R, where the same ``varfun``, ``varper`` and ``vardegree`` define both stages.
         
         Returns
         -------
         dict
-            Dictionary with MMT results for each region and pooled estimates
+            ``region_mmts``: per region name the MMT (``mmt`` temperature, ``percentile``, ...);
+            ``individual_mmts``: the regional MMT temperatures in region order;
+            ``pooled_mmt_median``, ``pooled_mmt_mean``, ``pooled_mmt_std``: median, mean and standard deviation of
+            the regional MMT TEMPERATURES (degrees);
+            ``pooled_mmt_percentile_median``: median of the regional MMT PERCENTILES (R's ``minperccountry``, the
+            country-level quantity used to re-centre every region at that percentile of its own distribution).
+        
+        Raises
+        ------
+        ValueError
+            If the MMT search fails for a region (for example a NaN BLUP or a BLUP whose length differs from the
+            number of columns of the first-stage basis); R stops as well.
         """
         
         if self.blup_results is None:
             raise ValueError("Must calculate BLUPs first using calculate_blups()")
         
-        print("Calculating pooled MMTs using BLUPs...")
-        
         region_mmts = {}
         mmt_values = []
+        mmt_percentiles = []
         
         for i, region_name in enumerate(self.region_names):
-            # Get temperature data for this region
-            temp_data = self.region_results[i]['glm_interface'].crossbasis.x
+            # Temperature data and first-stage variable basis of this region
+            crossbasis = self.region_results[i]['glm_interface'].crossbasis
+            temp_data = crossbasis.x
             blup_coef = self.blup_results[i]['blup']
+            argvar = getattr(crossbasis, 'argvar', None)
             
-            # Use find_mmt_blup function
             try:
-                mmt_result = find_mmt_blup(
-                    x=temp_data,
-                    blup_coef=blup_coef,
-                    fun="bs",  # Match the basis function used
-                    degree=2
-                )
-                
-                region_mmts[region_name] = mmt_result
-                mmt_values.append(mmt_result['mmt'])
-                
-                print(f"  - {region_name}: MMT = {mmt_result['mmt']:.2f}°C "
-                      f"({mmt_result['percentile']:.1f}th percentile)")
-                
-            except Exception as e:
-                print(f"  ⚠️  {region_name}: MMT calculation failed ({e})")
-                continue
+                if argvar:
+                    mmt_result = _mmt_from_blup(temp_data, blup_coef, argvar)
+                else:
+                    # no variable-basis specification available: the documented defaults of the Lancet analysis
+                    # (bs, degree 2, knots at the 10th/75th/90th percentiles)
+                    mmt_result = find_mmt_blup(x=temp_data, blup_coef=blup_coef)
+            except Exception as exc:
+                raise ValueError(f"MMT search failed for region {region_name!r}: {exc}") from exc
+            
+            region_mmts[region_name] = mmt_result
+            mmt_values.append(mmt_result['mmt'])
+            mmt_percentiles.append(mmt_result['percentile'])
         
-        # Calculate pooled/country-wide MMT (median of regional MMTs)
+        # Pooled/country-wide summaries of the regional MMTs
         if mmt_values:
-            pooled_mmt = np.median(mmt_values)
-            pooled_mean = np.mean(mmt_values)
-            pooled_std = np.std(mmt_values)
-            
-            print(f"  ✅ Pooled MMT (median): {pooled_mmt:.2f}°C")
-            print(f"  ✅ Pooled MMT (mean ± std): {pooled_mean:.2f} ± {pooled_std:.2f}°C")
-            
             self.pooled_mmts = {
                 'region_mmts': region_mmts,
-                'pooled_mmt_median': pooled_mmt,
-                'pooled_mmt_mean': pooled_mean,
-                'pooled_mmt_std': pooled_std,
+                'pooled_mmt_median': np.median(mmt_values),
+                'pooled_mmt_mean': np.mean(mmt_values),
+                'pooled_mmt_std': np.std(mmt_values),
+                'pooled_mmt_percentile_median': float(np.median(mmt_percentiles)),
                 'individual_mmts': mmt_values
             }
         else:
-            print("  ❌ No valid MMT calculations")
             self.pooled_mmts = {'region_mmts': {}, 'pooled_mmt_median': None}
         
         return self.pooled_mmts
@@ -281,7 +319,8 @@ class MultiLocationDLNM:
             'pooled_mmts': self.pooled_mmts
         }
         
-        if self.mv_model and self.mv_model.converged:
+        # Report the fit whenever one exists; 'meta_analysis_converged' carries the optimiser's flag
+        if self.mv_model and self.mv_model.psi is not None:
             summary.update({
                 'meta_analysis_loglik': self.mv_model.loglik,
                 'between_study_variance': np.trace(self.mv_model.psi),
@@ -319,17 +358,10 @@ def multi_location_dlnm_analysis(region_data: List[Dict[str, Any]],
         Complete analysis object with all results
     """
     
-    print("=" * 60)
-    print("Multi-Location DLNM Analysis")
-    print("=" * 60)
-    
     # Initialize analysis manager
     analysis = MultiLocationDLNM()
     
     # Step 1: Analyze each region individually
-    print(f"\n1. Individual Region Analysis ({len(region_data)} regions)")
-    print("-" * 40)
-    
     for region_info in region_data:
         analysis.add_region_analysis(
             region_name=region_info['name'],
@@ -341,31 +373,12 @@ def multi_location_dlnm_analysis(region_data: List[Dict[str, Any]],
         )
     
     # Step 2: Meta-analysis
-    print(f"\n2. Meta-Analysis")
-    print("-" * 40)
-    
     analysis.fit_meta_analysis(method=method)
     
     # Step 3: BLUP calculation
-    print(f"\n3. BLUP Calculation")
-    print("-" * 40)
-    
     analysis.calculate_blups(vcov=True)
     
     # Step 4: Pooled MMT calculation
-    print(f"\n4. Pooled MMT Calculation")
-    print("-" * 40)
-    
     analysis.calculate_pooled_mmts()
-    
-    # Summary
-    print(f"\n5. Summary")
-    print("-" * 40)
-    summary = analysis.get_summary()
-    print(f"✅ Analysis complete for {summary['n_regions']} regions")
-    if summary['pooled_mmts'].get('pooled_mmt_median'):
-        print(f"✅ Pooled MMT: {summary['pooled_mmts']['pooled_mmt_median']:.2f}°C")
-    
-    print("=" * 60)
     
     return analysis

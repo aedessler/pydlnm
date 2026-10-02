@@ -18,8 +18,10 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 
-os.environ['R_HOME'] = '/Library/Frameworks/R.framework/Resources'
-sys.path.insert(0, '/Users/adessler/Desktop/DLNM')
+# R_HOME is taken from the environment (set it before running if the default R lacks dlnm)
+from pathlib import Path
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent))
 
 import rpy2.robjects as ro
 from rpy2.robjects import numpy2ri
@@ -34,8 +36,8 @@ from meta_analysis import MVMeta, blup
 # ── Parameters ────────────────────────────────────────────────────────────────
 VARFUN = "bs"; VARDEGREE = 2; VARPER = [10, 75, 90]
 LAG = 21; LAGNK = 3; DFSEAS = 8
-DATA_PATH   = '../2015_gasparrini_Lancet_Rcodedata-master/regEngWales.csv'
-RESULTS_DIR = 'reference_data'
+DATA_PATH   = str(HERE.parent / '2015_gasparrini_Lancet_Rcodedata-master' / 'regEngWales.csv')
+RESULTS_DIR = str(HERE / 'reference_data')
 
 CODE_TO_NAME = {
     'N-East':'North East','N-West':'North West','York&Hum':'Yorkshire & Humber',
@@ -177,6 +179,6 @@ fig.suptitle('Temperature–Mortality RR Curves: R vs Python\n'
              fontsize=11, fontweight='bold', y=1.01)
 
 plt.tight_layout()
-out_path = "rr_comparison_R_vs_Python.png"
+out_path = str(HERE / "rr_comparison_R_vs_Python.png")
 plt.savefig(out_path, dpi=150, bbox_inches='tight')
 print(f"\nSaved: {out_path}")

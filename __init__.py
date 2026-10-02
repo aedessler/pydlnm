@@ -36,11 +36,11 @@ except ImportError:
         stacklevel=2
     )
 
-__version__ = "0.6.0"
+__version__ = "0.10.0"
 __author__ = "Python DLNM Contributors"
 
 # Core classes
-from basis import OneBasis, CrossBasis
+from basis import OneBasis, CrossBasis, onebasis, crossbasis
 from prediction import CrossPred, crosspred
 from meta_analysis import MVMeta, mvmeta, blup
 from centering import find_mmt, recenter_basis, CenteringManager
@@ -53,7 +53,7 @@ from rpy2_glm import Rpy2GLMInterface
 from crossreduce import CrossReduce, crossreduce, coef, vcov
 
 # Utility functions
-from utils import mklag, seqlag, exphist
+from utils import mklag, seqlag, exphist, logknots, equalknots
 
 # Basis function implementations
 from basis_functions import (
@@ -95,12 +95,11 @@ from multi_location import (
     multi_location_dlnm_analysis,
 )
 
-# Data
-from  import data
-
 __all__ = [
     "OneBasis",
     "CrossBasis", 
+    "onebasis",
+    "crossbasis",
     "CrossPred",
     "crosspred",
     "MVMeta",
@@ -124,6 +123,8 @@ __all__ = [
     "mklag",
     "seqlag", 
     "exphist",
+    "logknots",
+    "equalknots",
     "LinearBasis",
     "PolynomialBasis",
     "SplineBasis",
@@ -144,5 +145,4 @@ __all__ = [
     "penalized_dlnm",
     "MultiLocationDLNM",
     "multi_location_dlnm_analysis",
-    "data",
 ]

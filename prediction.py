@@ -12,7 +12,100 @@ import warnings
 
 from basis import OneBasis, CrossBasis
 from model_utils import validate_model_compatibility
-from utils import mklag, seqlag
+from utils import asfloat, mklag, seqlag, pretty
+
+
+def mkat(at, from_val, to_val, by, range_, lag=None, bylag=1.0) -> np.ndarray:
+    """
+    Exposure values at which crosspred predicts (port of R's ``mkat()``).
+
+    Without ``at``, the grid is ``pretty(c(from, to), n = 50)`` restricted to ``[from, to]`` (``from``/``to``
+    default to the range of the basis); with ``by`` it is ``seq(min(pretty), to, by)``. A vector ``at`` is sorted,
+    made unique and stripped of missing values. A matrix ``at`` (rows = exposure histories) is returned as is.
+    """
+    if at is None:
+        if from_val is None:
+            from_val = range_[0]
+        if to_val is None:
+            to_val = range_[1]
+        nobs = 50 if by is None else max(1, (range_[1] - range_[0]) / by)
+        grid = pretty([from_val, to_val], n=nobs)
+        grid = grid[(grid >= from_val) & (grid <= to_val)]
+        if grid.size == 0:
+            raise ValueError("no prediction values between 'from' and 'to'")
+        return grid if by is None else seqlag([grid.min(), to_val], by)
+    at = asfloat(at)                   # masked / nullable cells are missing values (NaN), as R's NA
+    if at.ndim == 2:
+        n_lags = int(np.diff(mklag(lag))[0]) + 1
+        if at.shape[1] != n_lags:
+            raise ValueError("matrix in 'at' must have ncol=diff(lag)+1")
+        if bylag != 1:
+            raise ValueError("'bylag!=1 not allowed with 'at' in matrix form")
+        return at
+    at = at.ravel()
+    return np.unique(at[~np.isnan(at)])
+
+
+def mkcen(cen, basis, range_):
+    """
+    Centering value of crosspred (port of R's ``mkcen()``); ``None`` means no centering.
+
+    Taken from the basis when not given. For thr/strata/integer/lin a logical ``cen`` means no centering; for the
+    other functions ``None``/``True`` is the (approximate) mid-range ``median(pretty(range))`` and ``False`` is no
+    centering. A basis with an intercept is never centered.
+    """
+    is_cb = isinstance(basis, CrossBasis)
+    nocen = cen is None
+    if nocen:
+        cen = basis.argvar.get('cen') if is_cb else getattr(basis, 'cen', None)
+    fun = basis.argvar.get('fun') if is_cb else getattr(basis, 'fun', None)
+    intercept = basis.argvar.get('intercept') if is_cb else getattr(basis, 'attributes', {}).get('intercept')
+    is_logical = isinstance(cen, (bool, np.bool_))
+    if isinstance(fun, str) and fun in ('thr', 'strata', 'integer', 'lin'):
+        if is_logical:
+            cen = None
+    else:
+        if cen is None or (is_logical and cen):
+            cen = float(np.median(pretty(range_)))
+        elif is_logical and not cen:
+            cen = None
+    if isinstance(intercept, (bool, np.bool_)) and intercept:
+        cen = None
+    if nocen and cen is not None:
+        warnings.warn(f"centering value unspecified. Automatically set to {cen}")
+    return cen
+
+
+def mkxpred(basis, at, predlag=None, cen=None) -> np.ndarray:
+    """
+    Design matrix of the predictions (port of R's ``mkXpred()``), as an array ``(n, n_lag, n_coef)``.
+
+    ``X[i, j]`` is the row of the (exposure-centred) design matrix for exposure ``at[i]`` at lag ``predlag[j]``.
+    ``at`` is a vector (the same exposure at every lag) or, for a CrossBasis, a matrix ``(n, n_lag)`` of exposure
+    histories. The bases are rebuilt from the arguments resolved on the training data. A OneBasis gives
+    ``(n, 1, n_coef)``.
+    """
+    at = asfloat(at)
+    if isinstance(basis, CrossBasis):
+        predlag = seqlag(basis.lag) if predlag is None else asfloat(predlag)
+        n_lag = len(predlag)
+        n = at.shape[0]
+        var_basis = OneBasis(at.ravel(), **basis.argvar).basis
+        # R: onebasis(predlag, <resolved arglag>); for 'integer' this is integer(predlag, values = <fitted lags>,
+        # intercept), so a lag sub-period gives the rows of the fitted indicator matrix
+        lag_basis = OneBasis(predlag, **basis.arglag).basis
+        if cen is not None:
+            var_basis = var_basis - OneBasis([cen], **basis.argvar).basis
+        if at.ndim == 2:
+            if at.shape[1] != n_lag:
+                raise ValueError("matrix 'at' must have one column per lag")
+            return np.einsum('ijv,jl->ijvl', var_basis.reshape(n, n_lag, -1), lag_basis).reshape(n, n_lag, -1)
+        return np.einsum('iv,jl->ijvl', var_basis, lag_basis).reshape(n, n_lag, -1)
+    args = basis.resolved_args()
+    var_basis = OneBasis(at.ravel(), **args).basis
+    if cen is not None:
+        var_basis = var_basis - OneBasis([cen], **args).basis
+    return var_basis[:, None, :]
 
 
 class CrossPred:
@@ -33,7 +126,8 @@ class CrossPred:
     vcov : array-like, optional
         Variance-covariance matrix (if model not provided)
     model_link : str, optional
-        Link function name
+        Link function name; takes precedence over the link inferred from ``model`` (R: ``getlink(model, class,
+        model.link)`` returns ``model.link`` when given)
     at : array-like, optional
         Values at which to make predictions
     from_val : float, optional
@@ -52,6 +146,13 @@ class CrossPred:
         Confidence interval level
     cumul : bool, default=False
         Whether to compute cumulative effects
+    name : str, optional
+        Name of the basis in ``model``: the prefix of the coefficient names of its terms (R: the name of the basis
+        object, ``deparse(substitute(basis))``, which Python cannot see). Select the block of one basis in a
+        model that holds several (R: ``crosspred(cb.temp, model)`` versus ``crosspred(cb.o3, model)``). Default:
+        the ``name`` attribute of the basis if it has one, else the basis is found among the design columns of the
+        model (statsmodels results) or of a PyDLNM GLM interface by its values, else by the coefficient names
+        ``v1.l1`` / ``b1``. Not used with ``coef``/``vcov``.
         
     Attributes
     ----------
@@ -93,11 +194,12 @@ class CrossPred:
                  bylag: float = 1.0,
                  cen: Optional[float] = None,
                  ci_level: float = 0.95,
-                 cumul: bool = False):
+                 cumul: bool = False,
+                 name: Optional[str] = None):
         
         # Determine basis type
         self.basis_type = self._determine_basis_type(basis)
-        self.basis_name = getattr(basis, '__name__', str(basis))
+        self.basis_name = name or getattr(basis, '__name__', None) or type(basis).__name__    # label of error messages
         
         # Store basis
         if isinstance(basis, str):
@@ -105,27 +207,6 @@ class CrossPred:
             raise NotImplementedError("GAM smoother predictions not yet implemented")
         else:
             self.basis = basis
-        
-        # Get original lag range
-        if hasattr(basis, 'lag'):
-            self.orig_lag = basis.lag
-        else:
-            self.orig_lag = np.array([0, 0])
-        
-        # Set prediction lag range
-        if lag is None:
-            self.lag = self.orig_lag.copy()
-        else:
-            self.lag = mklag(lag)
-        
-        # Validate lag range
-        if not np.array_equal(self.lag, self.orig_lag) and cumul:
-            raise ValueError("Cumulative prediction not allowed for lag sub-period")
-        
-        # Validate bylag for integer lag functions
-        if bylag != 1.0 and hasattr(basis, 'arglag'):
-            if basis.arglag.get('fun') == 'integer':
-                raise ValueError("Prediction for non-integer lags not allowed for type 'integer'")
         
         # Validate inputs
         if model is None and (coef is None or vcov is None):
@@ -136,62 +217,80 @@ class CrossPred:
         
         # Extract model information
         if model is not None:
-            model_info = validate_model_compatibility(model, basis.shape[1], self.basis_name)
+            # R: the block of the basis in the model, and getlink(model, class, model.link) (the user's link first)
+            model_info = validate_model_compatibility(model, basis.shape[1], self.basis_name, kind=self.basis_type,
+                                                      basis=basis, name=name, model_link=model_link)
             self.coefficients = model_info['coef']
             self.vcov = model_info['vcov']
-            self.model_link = model_info['link'] or model_link
+            self.model_link = model_info['link']
             self.model_class = model_info['class']
+            if np.isnan(self.coefficients).any() or np.isnan(self.vcov).any():
+                raise ValueError("coef/vcov not consistent with basis matrix. See help(crosspred) "
+                                 "(missing values, e.g. aliased coefficients of the model)")
         else:
-            self.coefficients = np.asarray(coef)
-            self.vcov = np.asarray(vcov)
+            self.coefficients = asfloat(coef, copy=True).ravel()       # a masked / NA entry is NaN: rejected below
+            self.vcov = np.atleast_2d(asfloat(vcov, copy=True))
+            npar = len(self.coefficients)
+            if (self.vcov.shape != (npar, npar) or np.isnan(self.coefficients).any() or np.isnan(self.vcov).any()
+                    or npar > basis.shape[1]):
+                raise ValueError("coef/vcov not consistent with basis matrix. See help(crosspred)")
             self.model_link = model_link
             self.model_class = 'Unknown'
         
-        # Handle reduced coefficients (when coef length < basis columns)
+        # Reduced coefficients: fewer coefficients than basis columns are the overall-effect coefficients of the
+        # exposure basis (crossreduce / BLUP). This is R's crosspred(onebasis, coef, vcov): a single lag [0, 0].
         basis_ncol = basis.shape[1]
         coef_len = len(self.coefficients)
+        self.reduced_coefficients = coef_len < basis_ncol
+        if self.reduced_coefficients and not (isinstance(basis, CrossBasis) and hasattr(basis, 'argvar')):
+            raise ValueError(f"Cannot handle reduced coefficients for basis type {type(basis)}")
         
-        if coef_len < basis_ncol:
-            # Reduced coefficients detected - use variable basis only
-            print(f"Detected reduced coefficients ({coef_len}) for basis ({basis_ncol})")
-            
-            if hasattr(basis, 'argvar') and isinstance(basis, CrossBasis):
-                # Create variable basis from cross-basis parameters
-                print("Creating variable basis from cross-basis argvar parameters")
-                
-                # Determine prediction values first
-                temp_predvar, temp_cen = self._setup_predictions(at, from_val, to_val, by, cen)
-                
-                # Create variable basis for predictions
-                from basis import OneBasis
-                self.variable_basis = OneBasis(temp_predvar, **basis.argvar)
-                
-                if self.variable_basis.shape[1] != coef_len:
-                    raise ValueError(f"Variable basis ({self.variable_basis.shape[1]}) doesn't match coefficients ({coef_len})")
-                
-                self.reduced_coefficients = True
-                self.original_basis = basis
-                print(f"Variable basis created: {self.variable_basis.shape}")
-                
-            else:
-                raise ValueError(f"Cannot handle reduced coefficients for basis type {type(basis)}")
+        # Get original lag range and set the prediction lag range
+        if self.reduced_coefficients:
+            self.orig_lag = np.array([0, 0])        # R: the one-basis has the single lag [0, 0]; 'lag' may name a sub-period
+        elif hasattr(basis, 'lag'):
+            self.orig_lag = basis.lag
         else:
-            # Full coefficients - use normal approach
-            if self.vcov.shape[0] < basis_ncol or self.vcov.shape[1] < basis_ncol:
-                raise ValueError(f"Variance-covariance matrix shape {self.vcov.shape} too small for basis")
-            
-            # Trim to basis size
-            self.coefficients = self.coefficients[:basis_ncol]
-            self.vcov = self.vcov[:basis_ncol, :basis_ncol]
-            self.reduced_coefficients = False
+            self.orig_lag = np.array([0, 0])
+        self.lag = self.orig_lag.copy() if lag is None else mklag(lag)
+        
+        # Validate lag range
+        if not np.array_equal(self.lag, self.orig_lag) and cumul:
+            raise ValueError("Cumulative prediction not allowed for lag sub-period")
+        
+        # Validate bylag for integer lag functions
+        if bylag != 1.0 and hasattr(basis, 'arglag'):
+            if basis.arglag.get('fun') == 'integer':
+                raise ValueError("Prediction for non-integer lags not allowed for type 'integer'")
+        
+        # Exposure values and centering (R: mkat, mkcen)
+        range_vals = basis.range if hasattr(basis, 'range') else (0, 1)
+        at_values = mkat(at, from_val, to_val, by, range_vals, self.lag, bylag)
+        if at_values.ndim == 2:
+            if self.basis_type != 'cb' or self.reduced_coefficients:
+                raise NotImplementedError("matrix 'at' is only supported for a CrossBasis with full coefficients")
+            self._at_matrix = at_values
+            self.predvar = np.arange(1, at_values.shape[0] + 1)
+        else:
+            self._at_matrix = None
+            self.predvar = at_values
+        self.cen = mkcen(cen, basis, range_vals)
+        
+        if self.reduced_coefficients:
+            # Variable basis at the prediction values, from the arguments resolved on the training data
+            self.variable_basis = OneBasis(self.predvar, **basis.argvar)
+            if self.variable_basis.shape[1] != coef_len:
+                raise ValueError(f"Variable basis ({self.variable_basis.shape[1]}) doesn't match coefficients ({coef_len})")
+            self.original_basis = basis
+        else:
+            # Full coefficients: the coefficients of the basis, one per column (checked above or selected by name)
+            if self.vcov.shape != (basis_ncol, basis_ncol):
+                raise ValueError(f"Variance-covariance matrix shape {self.vcov.shape} not consistent with basis")
         
         # Set prediction parameters
         self.bylag = bylag
         self.ci_level = ci_level
         self.cumul = cumul
-        
-        # Determine prediction values and centering
-        self.predvar, self.cen = self._setup_predictions(at, from_val, to_val, by, cen)
         
         # Generate predictions
         self._generate_predictions()
@@ -207,42 +306,6 @@ class CrossPred:
         else:
             raise ValueError("basis must be OneBasis, CrossBasis, or string")
     
-    def _setup_predictions(self, at, from_val, to_val, by, cen) -> Tuple[np.ndarray, Optional[float]]:
-        """Setup prediction values and centering."""
-        
-        # Get range from basis
-        if hasattr(self.basis, 'range'):
-            range_vals = self.basis.range
-        else:
-            range_vals = (0, 1)  # Default fallback
-        
-        # Determine prediction values
-        if at is not None:
-            predvar = np.asarray(at)
-        elif from_val is not None or to_val is not None or by is not None:
-            # Use from/to/by specification
-            start = from_val if from_val is not None else range_vals[0]
-            end = to_val if to_val is not None else range_vals[1]
-            step = by if by is not None else (end - start) / 20
-            predvar = np.arange(start, end + step/2, step)
-        else:
-            # Default: use range with reasonable number of points
-            predvar = np.linspace(range_vals[0], range_vals[1], 21)
-        
-        # Handle centering
-        if cen is None:
-            # Try to get from basis attributes
-            if hasattr(self.basis, 'argvar') and 'cen' in self.basis.argvar:
-                cen_val = self.basis.argvar['cen']
-            elif hasattr(self.basis, 'cen'):
-                cen_val = self.basis.cen
-            else:
-                cen_val = None
-        else:
-            cen_val = cen
-        
-        return predvar, cen_val
-    
     def _generate_predictions(self):
         """Generate all predictions."""
         
@@ -257,10 +320,12 @@ class CrossPred:
         
         # Set names
         self.predvar_names = [str(v) for v in self.predvar]
-        self.lag_names = [f"lag{int(l)}" if l.is_integer() else f"lag{l:.1f}" for l in predlag]
+        self.lag_names = [f"lag{l:.15g}" for l in predlag]   # R: paste0("lag", predlag) (15 significant digits)
         
-        # Generate overall and cumulative predictions
+        # Generate overall and cumulative predictions (they rebuild Xpred for integer lags: keep the lag-specific one)
+        xpred_lag_specific = self.Xpred
         self._generate_overall_predictions()
+        self.Xpred = xpred_lag_specific
         
         # Generate confidence intervals
         self._generate_confidence_intervals()
@@ -281,120 +346,60 @@ class CrossPred:
             raise NotImplementedError(f"Prediction matrix for {self.basis_type} not implemented")
     
     def _create_reduced_prediction_matrix(self, predvar: np.ndarray, predlag: np.ndarray) -> np.ndarray:
-        """Create prediction matrix for reduced coefficients (variable basis only)."""
-        
-        # For reduced coefficients, use the variable basis only
-        # The coefficients represent overall cumulative effects
-        
-        # Use the variable basis that was created during initialization
+        """Prediction matrix for reduced coefficients: the exposure basis, repeated for every lag requested."""
         basis_matrix = self.variable_basis.basis
         
         # Apply centering if specified
         if self.cen is not None:
-            from basis import OneBasis
             cen_basis = OneBasis([self.cen], **self.original_basis.argvar)
             basis_matrix = basis_matrix - cen_basis.basis
         
-        # For reduced coefficients, we typically only have one "lag" (overall effect)
-        # So we replicate the basis matrix for each lag value requested
-        n_lag = len(predlag)
-        n_var = len(predvar)
-        n_basis = basis_matrix.shape[1]
-        
-        # Create prediction matrix: each lag gets the same variable basis
-        Xpred = np.zeros((n_var * n_lag, n_basis))
-        
-        for i in range(n_var):
-            for j in range(n_lag):
-                row_idx = i * n_lag + j
-                Xpred[row_idx, :] = basis_matrix[i, :]
-        
-        return Xpred
+        # rows ordered VAR-outer, LAG-inner
+        return np.repeat(basis_matrix, len(predlag), axis=0)
     
     def _create_crossbasis_prediction_matrix(self, predvar: np.ndarray, predlag: np.ndarray) -> np.ndarray:
-        """Create prediction matrix for cross-basis."""
-
-        # Create marginal basis matrices
-        var_basis = OneBasis(predvar, **self.basis.argvar)
-        # integer lag: identity matrix (each lag is independent)
-        if self.basis.arglag.get('fun') == 'integer':
-            n_lags = len(predlag)
-            lag_basis = type('_IntegerLagBasis', (), {
-                'basis': np.eye(n_lags), 'shape': (n_lags, n_lags)
-            })()
-        else:
-            lag_basis = OneBasis(predlag, **self.basis.arglag)
-        
-        # Apply centering if specified
-        if self.cen is not None:
-            cen_basis = OneBasis([self.cen], **self.basis.argvar)
-            var_basis.basis = var_basis.basis - cen_basis.basis
-        
-        # Create tensor product
-        n_var = len(predvar)
-        n_lag = len(predlag)
-        n_var_basis = var_basis.shape[1]
-        n_lag_basis = lag_basis.shape[1]
-        
-        Xpred = np.zeros((n_var * n_lag, n_var_basis * n_lag_basis))
-        
-        for i in range(n_var):
-            for j in range(n_lag):
-                row_idx = i * n_lag + j
-                for v in range(n_var_basis):
-                    for l in range(n_lag_basis):
-                        col_idx = v * n_lag_basis + l
-                        Xpred[row_idx, col_idx] = var_basis.basis[i, v] * lag_basis.basis[j, l]
-        
-        return Xpred
+        """Create prediction matrix for cross-basis (rows VAR-outer, LAG-inner; columns v*n_lag_basis + l)."""
+        at = self._at_matrix if self._at_matrix is not None else asfloat(predvar)
+        x_pred = mkxpred(self.basis, at, predlag, self.cen)
+        return x_pred.reshape(x_pred.shape[0] * x_pred.shape[1], x_pred.shape[2])
     
     def _create_onebasis_prediction_matrix(self, predvar: np.ndarray, predlag: np.ndarray) -> np.ndarray:
         """Create prediction matrix for one-dimensional basis."""
         
-        # For OneBasis, predlag should be ignored (or length 1)
-        if len(predlag) > 1:
-            warnings.warn("OneBasis prediction ignores lag dimension beyond first value")
-        
-        # Create basis matrix
-        basis_matrix = OneBasis(predvar, **self.basis.attributes)
-        
+        # R (mkXpred, type "one"): the same exposure basis for every lag requested (there is no lag dimension)
+        # Rebuild the basis with the arguments resolved on the training data
+        # (R mkXpred, type "one": attributes matched with formals(fun))
+        args = self.basis.resolved_args()
+        basis_matrix = OneBasis(predvar, **args)
+
         # Apply centering if specified
         if self.cen is not None:
-            cen_basis = OneBasis([self.cen], **self.basis.attributes)
+            cen_basis = OneBasis([self.cen], **args)
             basis_matrix.basis = basis_matrix.basis - cen_basis.basis
         
-        return basis_matrix.basis
+        # rows ordered VAR-outer, LAG-inner
+        return np.repeat(basis_matrix.basis, len(predlag), axis=0)
     
     def _generate_overall_predictions(self):
         """Generate overall cumulative predictions."""
         
-        if hasattr(self, 'reduced_coefficients') and self.reduced_coefficients:
-            # For reduced coefficients, overall effects are computed directly
-            # The coefficients already represent overall cumulative effects
-            
-            # Use the variable basis that was created during initialization
+        if self.reduced_coefficients:
+            # Overall effects of reduced coefficients: the exposure basis times the coefficients, summed over the integer
+            # lags of the period (R: Xpredall <- sum of Xpred over seqlag(lag); one lag unless 'lag' names a sub-period)
             var_basis = self.variable_basis.basis
-            
-            # Apply centering if specified
             if self.cen is not None:
-                from basis import OneBasis
                 cen_basis = OneBasis([self.cen], **self.original_basis.argvar)
                 var_basis = var_basis - cen_basis.basis
+            var_basis = len(seqlag(self.lag)) * var_basis
             
-            # Direct calculation for reduced coefficients
             self.allfit = var_basis @ self.coefficients
             allvar = np.sum((var_basis @ self.vcov) * var_basis, axis=1)
             self.allse = np.sqrt(np.maximum(0, allvar))
             
-            # For reduced coefficients, cumulative effects are not meaningful in the same way
-            # But we can create a dummy structure for compatibility
+            # Cumulative effects over the single lag are the overall effects
             if self.cumul:
-                predlag_int = seqlag(self.lag)
-                self.cumfit = np.zeros((len(self.predvar), len(predlag_int)))
-                self.cumse = np.zeros((len(self.predvar), len(predlag_int)))
-                # Fill with overall effects as if they're the final cumulative effect
-                self.cumfit[:, -1] = self.allfit
-                self.cumse[:, -1] = self.allse
+                self.cumfit = self.allfit.reshape(-1, 1).copy()
+                self.cumse = self.allse.reshape(-1, 1).copy()
                 
         else:
             # Standard approach for full cross-basis coefficients
@@ -481,7 +486,7 @@ class CrossPred:
             f"Link function: {self.model_link or 'identity'}",
             f"Prediction values: {len(self.predvar)} points",
             f"Lag range: [{self.lag[0]}, {self.lag[1]}]",
-            f"Confidence level: {self.ci_level:.0%}",
+            f"Confidence level: {self.ci_level:g}",
         ]
         
         if self.cen is not None:
@@ -513,6 +518,7 @@ def crosspred(basis: Union[OneBasis, CrossBasis],
               cen: Optional[float] = None,
               ci_level: float = 0.95,
               cumul: bool = False,
+              name: Optional[str] = None,
               **kwargs) -> CrossPred:
     """
     Create cross-predictions from distributed lag models.
@@ -545,6 +551,9 @@ def crosspred(basis: Union[OneBasis, CrossBasis],
         Confidence interval level
     cumul : bool, default=False
         Whether to compute cumulative effects
+    name : str, optional
+        Name of the basis in ``model`` (prefix of the coefficient names of its terms, R's ``deparse(substitute(basis))``)
+        to select its block in a model that holds several bases; see ``CrossPred``
     **kwargs
         Additional arguments passed to CrossPred
         
@@ -556,12 +565,14 @@ def crosspred(basis: Union[OneBasis, CrossBasis],
         
     Examples
     --------
-    >>> from pydlnm import CrossBasis, crosspred, fit_dlnm_model
-    >>> cb = CrossBasis(temp, lag=21, argvar={'fun': 'bs'})
-    >>> model = fit_dlnm_model(cb, deaths, family='poisson')
-    >>> pred = crosspred(cb, model.fitted_values, cen=mean_temp)
+    >>> from basis import CrossBasis
+    >>> from prediction import crosspred
+    >>> cb = CrossBasis(temp, lag=21, argvar={'fun': 'bs', 'degree': 2, 'knots': knots},
+    ...                 arglag={'fun': 'ns', 'knots': lag_knots})
+    >>> # coef, vcov: the coefficients of the cross-basis from the fitted model
+    >>> pred = crosspred(cb, coef=coef, vcov=vcov, model_link='log', at=grid, cen=15.0)
     >>> print(pred.summary())
-    """
+        """
     
     # Validate parameters - either model or both coef and vcov must be provided
     if model is None and (coef is None or vcov is None):
@@ -583,6 +594,7 @@ def crosspred(basis: Union[OneBasis, CrossBasis],
         cen=cen,
         ci_level=ci_level,
         cumul=cumul,
+        name=name,
         **kwargs
     )
     
