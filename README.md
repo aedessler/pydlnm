@@ -4,7 +4,7 @@ PyDLNM is a Python implementation of distributed lag linear and non-linear model
 
 **Version 0.10** — Checked against R `dlnm` on three independent datasets (England & Wales, 106 US cities, Europe Summer 2022) and by a differential test suite that runs the same computation in R and in PyDLNM (`tests/`). The first-stage GLM, the cross-basis, `crosspred` and `crossreduce` agree with R at machine precision (~1e-14); the full pipeline including the Python meta-analysis (MVMeta → BLUP) agrees to about 1e-5, limited by the optimiser tolerance of R's own `mvmeta` (see below). v0.9 added support for natural-spline variable basis (`argvar={'fun':'ns'}`) and independent integer lag basis (`arglag={'fun':'integer'}`), enabling replication of weekly European epidemiological analyses. This looks like it's working well, but BE CAREFUL!  Errors might still exist!
 
-> **v0.10 is the result of an audit** of the Python code against R (line-by-line review plus executable R-vs-Python tests, 252 findings, all verified findings fixed or documented). It changes some behaviour to follow R: see [Changes in v0.10](#changes-in-v010) before upgrading.
+> **v0.10** changes some behaviour to follow R: see [Changes in v0.10](#changes-in-v010) before upgrading.
 
 ## Validation Status
 
@@ -48,9 +48,6 @@ Validated via `validation/test_europe_2022.py` against R's `dlnm` + `mixmeta`. T
 | 3 | RR curves from BLUPs | max\|ΔRR\| < 9e-7, corr = 1.0 for all regions |
 | 4 | Attributable numbers (point estimates, `att_val`), Summer 2022 | Total Heat AN: 7.5e-8 overall relative error, max 2.4e-6 per region (residual from the Stage 2 BLUP differences) |
 
-> **Stage 4 scope and a correction:** Stage 4 checks the attributable-number *formula* of the Lancet `code.R` (inline in the validation script, using `OneBasis` + MVMeta BLUPs + MMT) on point estimates only. An earlier version of this table reported a 1.7% error and attributed it to Monte-Carlo sampling. That was wrong: point estimates involve no sampling. The validation script averaged *past* deaths over the lags, whereas R's `Lag(mort, -MIN_LAG:-MAX_LAG)` uses *future* deaths (forward window). With the forward window the point estimates agree with R to the level of the Stage 2 BLUP differences. `attribution.py` (`attrdl`, `attr_heat_cold`, ...) was rewritten in v0.10 as a port of R's `attrdl` and is covered by the differential tests; the Europe validation code itself is no longer in the repository.
-
-> **R `crosspred` pitfall discovered during validation:** Calling `crosspred(crossbasis, model, coef=blup, vcov=blup_vcov)` in R silently ignores the user-supplied `coef`/`vcov` whenever a `model` is also passed — R extracts the model's own GLM estimates instead. The correct R usage for BLUP-based prediction is `crosspred(onebasis, coef=blup, vcov=blup_vcov)` (no model), as in Gasparrini's own `05.plots.R`. PyDLNM's reduced-coefficient path implements this correctly (single lag `[0, 0]`, like R's `onebasis` route) and matches R at machine precision.
 
 ## Implementation Strategy
 
@@ -78,7 +75,7 @@ PyDLNM uses R's statistical functions via `rpy2` for components where exact nume
 
 ## Changes in v0.10
 
-The audit compared the Python code with R's `dlnm`/`mvmeta` line by line and with executable differential tests. Behaviour that followed R incorrectly was changed to follow R; code that is not (yet) equivalent to R is documented below. Things to check when upgrading from v0.9:
+I compared the Python code with R's `dlnm`/`mvmeta` line by line and with executable differential tests. Behaviour that followed R incorrectly was changed to follow R; code that is not (yet) equivalent to R is documented below. Things to check when upgrading from v0.9:
 
 - **`crosspred` centering**: `cen=None` now centres at `median(pretty(range))` for bs/ns/poly bases (R's `mkcen`), with a message; use `cen=False` for no centering. `cen=True/False` are logical (ignored for lin/strata/thr/integer; no centering if the basis has an intercept). The default prediction grid is R's `pretty(range, n=50)`, `from`/`to`/`by` follow R's `mkat` (never beyond `to`), `at` is sorted and made unique, and an exposure-history matrix `at` is supported.
 - **`CrossBasis` defaults and arguments**: an empty `arglag` (or a single lag) now gives R's default lag basis `strata(df=1, intercept=TRUE)` (one unconstrained column), not `ns` with log-knots; the `argvar`/`arglag` you pass are copied and then redefined from the fitted bases (resolved knots, boundary knots, poly scale, strata breaks, threshold), so `crosspred`/`crossreduce` rebuild the training basis instead of re-deriving it from the prediction grid. Every `fun` (`lin`, `poly`, `ns`, `bs`, `strata`, `thr`, `integer`, callables) and `intercept` is honoured in both dimensions; unknown keyword arguments raise; R's spellings (`Boundary.knots`, `thr.value`, `type=`) are accepted; `mklag` rounds and `seqlag` never overshoots like R; negative lags, lag matrices and `group=` work as in R.
